@@ -13,7 +13,7 @@ npm link
 
 ```bash
 cp .env.example .env
-# set GAI_API_KEY in .env
+# set provider config in .env
 gai
 ```
 
@@ -66,9 +66,12 @@ gai config
 
 This command interactively writes:
 
+- `GAI_PROVIDER`
 - `GAI_API_KEY`
 - `GAI_BASE_URL`
 - `GAI_MODEL`
+- `GAI_FORMAT_MODEL`
+- `GAI_DISABLE_THINKING`
 
 If a value is already configured, pressing enter keeps the current value.
 
@@ -77,12 +80,32 @@ If a value is already configured, pressing enter keeps the current value.
 Default configuration uses Zhipu GLM 4.7 coding endpoint:
 
 ```env
+GAI_PROVIDER=zhipu
 GAI_API_KEY=your_zhipu_api_key_here
 GAI_BASE_URL=https://open.bigmodel.cn/api/coding/paas/v4
 GAI_MODEL=glm-4.7
+GAI_FORMAT_MODEL=glm-4.7-flash
+GAI_DISABLE_THINKING=true
 ```
 
-The CLI uses OpenAI-compatible chat completions, so you can switch providers later by changing `GAI_BASE_URL`, `GAI_MODEL`, and `GAI_API_KEY`.
+The CLI now uses a provider adapter architecture. Current built-in providers:
+
+- `zhipu` (default)
+- `openai`
+- `openai-compatible`
+
+You can switch providers by changing `GAI_PROVIDER`, `GAI_BASE_URL`, `GAI_MODEL`, and `GAI_API_KEY`.
+
+Example for OpenAI:
+
+```env
+GAI_PROVIDER=openai
+GAI_API_KEY=your_openai_api_key_here
+GAI_BASE_URL=https://api.openai.com/v1
+GAI_MODEL=gpt-4.1-mini
+GAI_FORMAT_MODEL=gpt-4.1-mini
+GAI_DISABLE_THINKING=true
+```
 
 If your Zhipu account does not support the coding endpoint for this custom CLI, switch `GAI_BASE_URL` to:
 
@@ -103,6 +126,7 @@ GAI_BASE_URL=https://open.bigmodel.cn/api/paas/v4
   - `Regenerate`: call model again.
   - `Cancel`: exit without changes.
 - During `Confirm`, the terminal shows clear progress for `git add`, `git commit`, and `git push`.
+- After `Confirm` succeeds, the CLI exits directly.
 
 ## Notes
 

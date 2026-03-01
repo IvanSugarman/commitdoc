@@ -10,7 +10,7 @@ import readline from 'node:readline/promises';
 import React, {useCallback, useEffect, useMemo, useState} from 'react';
 import {Box, Text, render, useApp, useInput} from 'ink';
 import {applyCommitAndPush, getChangesForSummary, isGitRepo} from './git.mjs';
-import {generateSuggestion} from './openai.mjs';
+import {generateSuggestion, getProviderName, getResolvedProviderConfig} from './openai.mjs';
 import {buildPrompt} from './prompt.mjs';
 
 /** @type {(file: string, args: string[]) => Promise<{stdout: string; stderr: string}>} */
@@ -43,11 +43,14 @@ const INSTALL_BLOCK_START = '# GAI_CLI:START';
 /** @type {string} */
 const INSTALL_BLOCK_END = '# GAI_CLI:END';
 
-/** @type {{ GAI_API_KEY: string; GAI_BASE_URL: string; GAI_MODEL: string }} */
+/** @type {{ GAI_PROVIDER: string; GAI_API_KEY: string; GAI_BASE_URL: string; GAI_MODEL: string; GAI_FORMAT_MODEL: string; GAI_DISABLE_THINKING: string }} */
 const DEFAULT_ENV = {
+  GAI_PROVIDER: 'zhipu',
   GAI_API_KEY: '',
   GAI_BASE_URL: 'https://open.bigmodel.cn/api/coding/paas/v4',
-  GAI_MODEL: 'glm-4.7'
+  GAI_MODEL: 'glm-4.7',
+  GAI_FORMAT_MODEL: 'glm-4.7-flash',
+  GAI_DISABLE_THINKING: 'true'
 };
 
 /**
@@ -82,6 +85,7 @@ const DEFAULT_ENV = {
  * @property {number} patchChars 补丁字符数。
  * @property {number} promptChars Prompt 字符数。
  * @property {number} estimatedInputTokens 估算输入 token 数。
+ * @property {string} provider Provider 展示名称。
  * @property {string[]} notes 说明列表。
  */
 
@@ -142,7 +146,7 @@ async function readEnvConfig() {
 /**
  * @description 构建 env 文件内容，同时保留非 gai 配置。
  * @param {Record<string, string>} current 当前 env 配置。
- * @param {{ GAI_API_KEY: string; GAI_BASE_URL: string; GAI_MODEL: string }} next 下一版配置。
+ * @param {{ GAI_PROVIDER: string; GAI_API_KEY: string; GAI_BASE_URL: string; GAI_MODEL: string; GAI_FORMAT_MODEL: string; GAI_DISABLE_THINKING: string }} next 下一版配置。
  * @return {string} 新的 env 文件内容。
  */
 function buildEnvFileContent(current, next) {
@@ -150,15 +154,18 @@ function buildEnvFileContent(current, next) {
   const preserved = [];
 
   Object.entries(current).forEach(([key, value]) => {
-    if (!['GAI_API_KEY', 'GAI_BASE_URL', 'GAI_MODEL'].includes(key)) {
+    if (!['GAI_PROVIDER', 'GAI_API_KEY', 'GAI_BASE_URL', 'GAI_MODEL', 'GAI_FORMAT_MODEL', 'GAI_DISABLE_THINKING'].includes(key)) {
       preserved.push(`${key}=${value}`);
     }
   });
 
   return [
+    `GAI_PROVIDER=${next.GAI_PROVIDER}`,
     `GAI_API_KEY=${next.GAI_API_KEY}`,
     `GAI_BASE_URL=${next.GAI_BASE_URL}`,
     `GAI_MODEL=${next.GAI_MODEL}`,
+    `GAI_FORMAT_MODEL=${next.GAI_FORMAT_MODEL}`,
+    `GAI_DISABLE_THINKING=${next.GAI_DISABLE_THINKING}`,
     ...preserved
   ].join('\n') + '\n';
 }
@@ -275,6 +282,19 @@ async function runDoctor() {
 
   const envConfig = await readEnvConfig();
   const apiKey = envConfig.GAI_API_KEY || process.env.GAI_API_KEY || '';
+  const providerName = envConfig.GAI_PROVIDER || process.env.GAI_PROVIDER || getProviderName();
+  /** @type {{model: string; formatModel: string; baseURL: string; disableThinking: boolean}} */
+  let providerConfig = {
+    model: envConfig.GAI_MODEL || process.env.GAI_MODEL || DEFAULT_ENV.GAI_MODEL,
+    formatModel: envConfig.GAI_FORMAT_MODEL || process.env.GAI_FORMAT_MODEL || DEFAULT_ENV.GAI_FORMAT_MODEL,
+    baseURL: envConfig.GAI_BASE_URL || process.env.GAI_BASE_URL || DEFAULT_ENV.GAI_BASE_URL,
+    disableThinking: (envConfig.GAI_DISABLE_THINKING || process.env.GAI_DISABLE_THINKING || DEFAULT_ENV.GAI_DISABLE_THINKING) !== 'false'
+  };
+  try {
+    providerConfig = getResolvedProviderConfig();
+  } catch {
+    // 保持使用基于 env 的兜底配置，避免 doctor 因缺少 key 中断
+  }
   items.push({
     name: 'GAI_API_KEY',
     status: apiKey ? 'pass' : 'fail',
@@ -282,9 +302,15 @@ async function runDoctor() {
   });
 
   items.push({
-    name: 'Model Config',
-    status: envConfig.GAI_MODEL || process.env.GAI_MODEL ? 'pass' : 'warn',
-    detail: `model=${envConfig.GAI_MODEL || process.env.GAI_MODEL || DEFAULT_ENV.GAI_MODEL}, baseURL=${envConfig.GAI_BASE_URL || process.env.GAI_BASE_URL || DEFAULT_ENV.GAI_BASE_URL}`
+    name: 'Provider Config',
+    status: providerName ? 'pass' : 'warn',
+    detail: `provider=${providerName}, model=${providerConfig.model}, formatModel=${providerConfig.formatModel}`
+  });
+
+  items.push({
+    name: 'Provider Endpoint',
+    status: providerConfig.baseURL ? 'pass' : 'warn',
+    detail: `baseURL=${providerConfig.baseURL}, disableThinking=${providerConfig.disableThinking ? 'true' : 'false'}`
   });
 
   try {
@@ -390,6 +416,7 @@ async function analyzeTokenUsage() {
   return {
     source: summary.source,
     strategy: summary.strategy,
+    provider: getProviderLabel(),
     fileCount: summary.stats.fileCount,
     ignoredFileCount: summary.stats.ignoredFileCount,
     highContextFileCount: summary.stats.highContextFileCount,
@@ -407,28 +434,132 @@ async function analyzeTokenUsage() {
  * @description 输出 token 诊断信息。
  * @return {Promise<void>} 输出完成。
  */
-async function printTokenDoctor() {
-  const result = await analyzeTokenUsage();
-  process.stdout.write('gai doctor --token\n\n');
-  process.stdout.write(`来源: ${result.source === 'staged' ? '暂存区改动' : '工作区改动'}\n`);
-  process.stdout.write(`策略: ${result.strategy === 'incremental' ? '增量' : result.strategy === 'contextual' ? '增量 + 上下文' : '压缩摘要'}\n`);
-  process.stdout.write(`文件数: ${result.fileCount}\n`);
-  process.stdout.write(`忽略文件数: ${result.ignoredFileCount}\n`);
-  process.stdout.write(`高上下文文件数: ${result.highContextFileCount}\n`);
-  process.stdout.write('\n');
-  process.stdout.write(`nameStatus chars: ${result.nameStatusChars}\n`);
-  process.stdout.write(`fileSummary chars: ${result.fileSummaryChars}\n`);
-  process.stdout.write(`contextSummary chars: ${result.contextSummaryChars}\n`);
-  process.stdout.write(`patch chars: ${result.patchChars}\n`);
-  process.stdout.write(`prompt chars: ${result.promptChars}\n`);
-  process.stdout.write(`estimated input tokens: ${result.estimatedInputTokens}\n`);
+function getSourceLabel(source) {
+  return source === 'staged' ? '暂存区改动' : '工作区改动';
+}
 
-  if (result.notes.length > 0) {
-    process.stdout.write('\n');
-    result.notes.forEach((note) => {
-      process.stdout.write(`- ${note}\n`);
-    });
+/**
+ * @description 获取策略展示文案。
+ * @param {'incremental'|'contextual'|'compressed'|null} strategy 摘要策略。
+ * @return {string} 展示文案。
+ */
+function getStrategyLabel(strategy) {
+  return strategy === 'incremental' ? '增量' : strategy === 'contextual' ? '增量 + 上下文' : '压缩摘要';
+}
+
+/**
+ * @description 获取当前 Provider 展示文案。
+ * @return {string} Provider 展示文案。
+ */
+function getProviderLabel() {
+  const provider = process.env.GAI_PROVIDER || 'zhipu';
+  const model = process.env.GAI_MODEL || DEFAULT_ENV.GAI_MODEL;
+  return `${provider} / ${model}`;
+}
+
+/**
+ * @description Token 诊断界面。
+ * @return {React.ReactElement} Ink 组件。
+ */
+function TokenDoctorApp() {
+  const {exit} = useApp();
+  /** @type {[TokenDoctorResult | null, (value: TokenDoctorResult | null) => void]} */
+  const [result, setResult] = useState(null);
+  /** @type {[string | null, (value: string | null) => void]} */
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+
+    analyzeTokenUsage()
+      .then((value) => {
+        if (!active) {
+          return;
+        }
+
+        setResult(value);
+        setTimeout(() => {
+          exit();
+        }, 0);
+      })
+      .catch((cause) => {
+        if (!active) {
+          return;
+        }
+
+        setError(cause instanceof Error ? cause.message : String(cause));
+        setTimeout(() => {
+          exit();
+        }, 0);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [exit]);
+
+  if (error) {
+    return h(
+      Box,
+      {flexDirection: 'column', padding: 1},
+      [
+        h(Text, {key: 'title', color: 'cyan'}, 'gai doctor --token'),
+        h(Text, {key: 'error', color: 'red'}, `Error: ${error}`)
+      ]
+    );
   }
+
+  if (!result) {
+    return h(
+      Box,
+      {flexDirection: 'column', padding: 1},
+      [
+        h(Text, {key: 'title', color: 'cyan'}, 'gai doctor --token'),
+        h(Text, {key: 'loading', color: 'yellow'}, '正在分析当前改动的 token 使用...')
+      ]
+    );
+  }
+
+  return h(
+    Box,
+    {flexDirection: 'column', padding: 1},
+    [
+      h(Text, {key: 'title', color: 'cyan'}, 'gai doctor --token'),
+      h(
+        Box,
+        {key: 'summary-box', flexDirection: 'column', marginTop: 1},
+        [
+          h(Text, {key: 'source', color: 'green'}, `来源: ${getSourceLabel(result.source)}`),
+          h(Text, {key: 'strategy', color: 'green'}, `策略: ${getStrategyLabel(result.strategy)}`),
+          h(Text, {key: 'provider'}, `Provider: ${result.provider}`),
+          h(Text, {key: 'files'}, `文件数: ${result.fileCount}`),
+          h(Text, {key: 'ignored'}, `忽略文件数: ${result.ignoredFileCount}`),
+          h(Text, {key: 'high-context'}, `高上下文文件数: ${result.highContextFileCount}`)
+        ]
+      ),
+      h(
+        Box,
+        {key: 'size-box', flexDirection: 'column', marginTop: 1},
+        [
+          h(Text, {key: 'size-title', color: 'green'}, '体积统计'),
+          h(Text, {key: 'name-status'}, `nameStatus chars: ${result.nameStatusChars}`),
+          h(Text, {key: 'file-summary'}, `fileSummary chars: ${result.fileSummaryChars}`),
+          h(Text, {key: 'context-summary'}, `contextSummary chars: ${result.contextSummaryChars}`),
+          h(Text, {key: 'patch'}, `patch chars: ${result.patchChars}`),
+          h(Text, {key: 'prompt'}, `prompt chars: ${result.promptChars}`),
+          h(Text, {key: 'tokens', color: 'yellow'}, `estimated input tokens: ${result.estimatedInputTokens}`)
+        ]
+      ),
+      h(
+        Box,
+        {key: 'notes-box', flexDirection: 'column', marginTop: 1},
+        [
+          h(Text, {key: 'notes-title', color: 'green'}, '说明'),
+          ...result.notes.map((note, index) => h(Text, {key: `note-${index}`}, `- ${note}`))
+        ]
+      )
+    ]
+  );
 }
 
 /**
@@ -444,22 +575,30 @@ async function runConfig() {
   });
 
   try {
+    const provider = await promptField(rl, '请输入 GAI_PROVIDER', current.GAI_PROVIDER || DEFAULT_ENV.GAI_PROVIDER);
     const apiKey = await promptField(rl, '请输入 GAI_API_KEY', current.GAI_API_KEY || DEFAULT_ENV.GAI_API_KEY, true);
     const baseURL = await promptField(rl, '请输入 GAI_BASE_URL', current.GAI_BASE_URL || DEFAULT_ENV.GAI_BASE_URL);
     const model = await promptField(rl, '请输入 GAI_MODEL', current.GAI_MODEL || DEFAULT_ENV.GAI_MODEL);
+    const formatModel = await promptField(rl, '请输入 GAI_FORMAT_MODEL', current.GAI_FORMAT_MODEL || DEFAULT_ENV.GAI_FORMAT_MODEL);
+    const disableThinking = await promptField(rl, '请输入 GAI_DISABLE_THINKING', current.GAI_DISABLE_THINKING || DEFAULT_ENV.GAI_DISABLE_THINKING);
 
     await writeFile(
       ENV_PATH,
       buildEnvFileContent(current, {
+        GAI_PROVIDER: provider,
         GAI_API_KEY: apiKey,
         GAI_BASE_URL: baseURL,
-        GAI_MODEL: model
+        GAI_MODEL: model,
+        GAI_FORMAT_MODEL: formatModel,
+        GAI_DISABLE_THINKING: disableThinking
       }),
       'utf8'
     );
 
     process.stdout.write(`已写入 ${ENV_PATH}\n`);
+    process.stdout.write(`GAI_PROVIDER=${provider}\n`);
     process.stdout.write(`GAI_MODEL=${model}\n`);
+    process.stdout.write(`GAI_FORMAT_MODEL=${formatModel}\n`);
     process.stdout.write(`GAI_BASE_URL=${baseURL}\n`);
     process.stdout.write('配置完成，可直接执行 gai 或 gai doctor。\n');
   } finally {
@@ -478,7 +617,7 @@ function printHelp() {
     '用法:',
     '  gai            生成 Commit 建议并交互执行 git add / commit / push',
     '  gai install    写入 ~/.zshrc 并校验 gai 命令可用',
-    '  gai doctor     检查 Node、Git、.env、API Key、zsh 安装状态',
+    '  gai doctor     检查 Node、Git、.env、Provider、zsh 安装状态',
     '  gai doctor --token 估算当前改动的 prompt 体积与 token 使用',
     '  gai config     交互式写入 .env 配置',
     '  gai --help     查看帮助'
@@ -566,8 +705,6 @@ function App() {
   const [menuIndex, setMenuIndex] = useState(0);
   /** @type {[boolean, (value: boolean) => void]} */
   const [submitting, setSubmitting] = useState(false);
-  /** @type {[boolean, (value: boolean) => void]} */
-  const [completed, setCompleted] = useState(false);
   /** @type {['staged'|'working-tree'|null, (value: 'staged'|'working-tree'|null) => void]} */
   const [summarySource, setSummarySource] = useState(null);
   /** @type {['incremental'|'contextual'|'compressed'|null, (value: 'incremental'|'contextual'|'compressed'|null) => void]} */
@@ -578,7 +715,6 @@ function App() {
   const runGenerate = useCallback(async () => {
     setLoading(true);
     setError(null);
-    setCompleted(false);
     setSteps(createInitialSteps());
 
     try {
@@ -623,7 +759,6 @@ function App() {
     }
 
     setSubmitting(true);
-    setCompleted(false);
     setError(null);
     setSteps(createInitialSteps());
 
@@ -639,21 +774,17 @@ function App() {
           );
         }
       );
-      setCompleted(true);
+      exit();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setSubmitting(false);
     }
-  }, [suggestion]);
+  }, [exit, suggestion]);
 
   const tips = useMemo(() => {
-    if (completed) {
-      return ['enter: exit', 'q: exit'];
-    }
-
     return ['up/down: move', 'enter: select', 'r: regenerate', 'q: cancel'];
-  }, [completed]);
+  }, []);
 
   useInput((input, key) => {
     if (loading || submitting) {
@@ -661,11 +792,6 @@ function App() {
     }
 
     if (input === 'q') {
-      exit();
-      return;
-    }
-
-    if (completed && key.return) {
       exit();
       return;
     }
@@ -723,6 +849,7 @@ function App() {
         {key: 'strategy', color: 'gray'},
         `策略: ${summaryStrategy === 'incremental' ? '增量' : summaryStrategy === 'contextual' ? '增量 + 上下文' : '压缩摘要'}`
       ),
+      h(Text, {key: 'provider', color: 'gray'}, `Provider: ${getProviderLabel()}`),
       h(Text, {key: 'summary-label', color: 'green'}, '变更摘要')
     ];
 
@@ -730,33 +857,31 @@ function App() {
       suggestionNodes.push(h(Text, {key: `bullet-${index}`}, `- ${line}`));
     });
 
-    if (!completed) {
-      suggestionNodes.push(
-        h(
-          Box,
-          {key: 'menu', flexDirection: 'column', marginTop: 1},
-          MENU_OPTIONS.map((option, index) =>
-            h(MenuItem, {
-              key: option,
-              option,
-              selected: index === menuIndex
-            })
-          )
+    suggestionNodes.push(
+      h(
+        Box,
+        {key: 'menu', flexDirection: 'column', marginTop: 1},
+        MENU_OPTIONS.map((option, index) =>
+          h(MenuItem, {
+            key: option,
+            option,
+            selected: index === menuIndex
+          })
         )
-      );
-    }
+      )
+    );
 
     suggestionNodes.push(h(Text, {key: 'tips', color: 'gray'}, tips.join(' | ')));
     content.push(h(Box, {key: 'suggestion-box', flexDirection: 'column', marginTop: 1}, suggestionNodes));
   }
 
-  if (submitting || completed) {
+  if (submitting) {
     content.push(
       h(
         Box,
         {key: 'progress-box', flexDirection: 'column', marginTop: 1},
         [
-          h(Text, {key: 'progress-title', color: completed ? 'green' : 'yellow'}, completed ? '执行结果' : '执行进度'),
+          h(Text, {key: 'progress-title', color: 'yellow'}, '执行进度'),
           ...steps.map((step) =>
             h(
               Text,
@@ -766,11 +891,8 @@ function App() {
               },
               `${getStepIcon(step.status)} ${getStepLabel(step.name)}`
             )
-          ),
-          completed
-            ? h(Text, {key: 'completed-tip', color: 'green'}, '提交与推送已完成，按 enter 或 q 退出。')
-            : null
-        ].filter(Boolean)
+          )
+        ]
       )
     );
   }
@@ -796,7 +918,7 @@ async function main() {
 
   if (command === 'doctor') {
     if (process.argv[3] === '--token') {
-      await printTokenDoctor();
+      render(h(TokenDoctorApp));
       return;
     }
 
