@@ -51,31 +51,50 @@ function parseSuggestion(raw) {
 }
 
 /**
+ * @description 读取模型接入配置，默认使用智谱 GLM 4.7 Coding 端点。
+ * @return {{apiKey: string; baseURL: string; model: string}} 运行时配置。
+ */
+function getModelConfig() {
+  /** @type {string | undefined} */
+  const apiKey = process.env.GAI_API_KEY || process.env.ZHIPU_API_KEY || process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error('GAI_API_KEY is required for the configured model provider');
+  }
+
+  return {
+    apiKey,
+    baseURL: process.env.GAI_BASE_URL || 'https://open.bigmodel.cn/api/coding/paas/v4',
+    model: process.env.GAI_MODEL || 'glm-4.7'
+  };
+}
+
+/**
  * @description 调用模型生成提交建议。
  * @param {string} prompt 输入提示词。
  * @return {Promise<CommitSuggestion>} 返回结构化提交建议。
  */
 export async function generateSuggestion(prompt) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY is required');
-  }
+  const config = getModelConfig();
 
   /** @type {OpenAI} */
-  const client = new OpenAI({apiKey});
+  const client = new OpenAI({
+    apiKey: config.apiKey,
+    baseURL: config.baseURL
+  });
 
-  const response = await client.responses.create({
-    model: process.env.GAI_MODEL || 'gpt-4.1-mini',
-    input: [
+  const response = await client.chat.completions.create({
+    model: config.model,
+    temperature: 0.2,
+    messages: [
       {
         role: 'user',
-        content: [{type: 'input_text', text: prompt}]
+        content: prompt
       }
     ]
   });
 
-  const text = response.output_text?.trim();
-  if (!text) {
+  const text = response.choices?.[0]?.message?.content?.trim();
+  if (typeof text !== 'string' || !text) {
     throw new Error('Empty model output');
   }
 

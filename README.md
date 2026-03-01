@@ -13,8 +13,26 @@ npm link
 
 ```bash
 cp .env.example .env
-# set OPENAI_API_KEY in .env
+# set GAI_API_KEY in .env
 gai
+```
+
+## Model Config
+
+Default configuration uses Zhipu GLM 4.7 coding endpoint:
+
+```env
+GAI_API_KEY=your_zhipu_api_key_here
+GAI_BASE_URL=https://open.bigmodel.cn/api/coding/paas/v4
+GAI_MODEL=glm-4.7
+```
+
+The CLI uses OpenAI-compatible chat completions, so you can switch providers later by changing `GAI_BASE_URL`, `GAI_MODEL`, and `GAI_API_KEY`.
+
+If your Zhipu account does not support the coding endpoint for this custom CLI, switch `GAI_BASE_URL` to:
+
+```env
+GAI_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 ```
 
 ## Behavior
