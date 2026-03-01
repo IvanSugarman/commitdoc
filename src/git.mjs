@@ -207,10 +207,13 @@ export function clipPatch(patch, maxChars = 12000) {
 /**
  * @description 执行 add、commit、push 的自动化流程。
  * @param {{title: string; bullets: string[]}} payload 提交信息。
+ * @param {(step: {name: 'add'|'commit'|'push'; status: 'running'|'success'}) => void} [onProgress] 进度回调。
  * @return {Promise<void>} 流程执行完成。
  */
-export async function applyCommitAndPush(payload) {
+export async function applyCommitAndPush(payload, onProgress) {
+  onProgress?.({name: 'add', status: 'running'});
   await runGit(['add', '-A']);
+  onProgress?.({name: 'add', status: 'success'});
 
   /** @type {string[]} */
   const args = ['commit', '-m', payload.title];
@@ -218,6 +221,11 @@ export async function applyCommitAndPush(payload) {
     args.push('-m', payload.bullets.map((item) => `- ${item}`).join('\n'));
   }
 
+  onProgress?.({name: 'commit', status: 'running'});
   await runGit(args);
+  onProgress?.({name: 'commit', status: 'success'});
+
+  onProgress?.({name: 'push', status: 'running'});
   await runGit(['push']);
+  onProgress?.({name: 'push', status: 'success'});
 }

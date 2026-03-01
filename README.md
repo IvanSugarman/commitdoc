@@ -38,11 +38,12 @@ GAI_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 ## Behavior
 
 - Prioritizes staged changes; if none exist, falls back to working tree changes.
-- Commit title is normalized to: `feat: ...`, `fix: ...`, or `chore: ...`.
+- Commit title and summary are generated in Chinese, while commit type keywords remain English, for example: `feat: 切换默认模型为 GLM 4.7`.
 - You can choose:
   - `Confirm`: run add + commit + push.
   - `Regenerate`: call model again.
   - `Cancel`: exit without changes.
+- During `Confirm`, the terminal shows clear progress for `git add`, `git commit`, and `git push`.
 
 ## Notes
 
