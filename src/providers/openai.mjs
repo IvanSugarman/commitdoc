@@ -11,7 +11,8 @@ export function getOpenAIConfig() {
     baseURL: process.env.GAI_BASE_URL || 'https://api.openai.com/v1',
     model: process.env.GAI_MODEL || 'gpt-4.1-mini',
     formatModel: process.env.GAI_FORMAT_MODEL || process.env.GAI_MODEL || 'gpt-4.1-mini',
-    disableThinking: process.env.GAI_DISABLE_THINKING !== 'false'
+    disableThinking: process.env.GAI_DISABLE_THINKING !== 'false',
+    enableFormatFallback: process.env.GAI_ENABLE_FORMAT_FALLBACK === 'true'
   });
 }
 

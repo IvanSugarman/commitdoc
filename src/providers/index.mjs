@@ -13,6 +13,7 @@ import {getZhipuConfig, generateSuggestion as generateZhipuSuggestion} from './z
  * @property {string} model 默认模型。
  * @property {string} formatModel 默认格式化模型。
  * @property {boolean} disableThinking 是否默认关闭 thinking。
+ * @property {boolean} enableFormatFallback 是否默认启用二次格式化请求。
  */
 
 /**
@@ -42,7 +43,8 @@ export function getProviderDefaults(providerName) {
       baseURL: 'https://api.openai.com/v1',
       model: 'gpt-4.1-mini',
       formatModel: 'gpt-4.1-mini',
-      disableThinking: true
+      disableThinking: true,
+      enableFormatFallback: false
     };
   }
 
@@ -52,7 +54,8 @@ export function getProviderDefaults(providerName) {
       baseURL: 'https://api.openai.com/v1',
       model: 'gpt-4.1-mini',
       formatModel: 'gpt-4.1-mini',
-      disableThinking: true
+      disableThinking: true,
+      enableFormatFallback: false
     };
   }
 
@@ -61,7 +64,8 @@ export function getProviderDefaults(providerName) {
     baseURL: 'https://open.bigmodel.cn/api/coding/paas/v4',
     model: 'glm-4.7',
     formatModel: 'glm-4.7-flash',
-    disableThinking: true
+    disableThinking: true,
+    enableFormatFallback: false
   };
 }
 

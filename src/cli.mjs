@@ -4,6 +4,7 @@ import {execFile} from 'node:child_process';
 import {access, appendFile, mkdir, readFile, readdir, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {performance} from 'node:perf_hooks';
 import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
 import readline from 'node:readline/promises';
@@ -98,6 +99,16 @@ const DEFAULT_ENV = {
  * @property {number} estimatedInputTokens 估算输入 token 数。
  * @property {string} provider Provider 展示名称。
  * @property {string[]} notes 说明列表。
+ */
+
+/**
+ * @typedef {'git'|'prompt'|'model'} PhaseName
+ */
+
+/**
+ * @typedef {Object} PhaseTiming
+ * @property {PhaseName} name 阶段名称。
+ * @property {number} durationMs 阶段耗时。
  */
 
 /**
@@ -533,6 +544,26 @@ function getProviderLabel() {
   return `${provider} / ${model}`;
 }
 
+/**
+ * @description 获取阶段中文名称。
+ * @param {PhaseName} phase 阶段名称。
+ * @return {string} 展示文案。
+ */
+function getPhaseLabel(phase) {
+  if (phase === 'git') return 'Git 提取';
+  if (phase === 'prompt') return 'Prompt 构建';
+  return '模型生成';
+}
+
+/**
+ * @description 计算阶段总耗时。
+ * @param {PhaseTiming[]} timings 阶段耗时列表。
+ * @return {number} 总耗时。
+ */
+function getTotalPhaseDuration(timings) {
+  return timings.reduce((total, item) => total + item.durationMs, 0);
+}
+
 function TokenDoctorApp() {
   const {exit} = useApp();
   const [result, setResult] = useState(null);
@@ -683,32 +714,52 @@ function App() {
   const [summarySource, setSummarySource] = useState(null);
   const [summaryStrategy, setSummaryStrategy] = useState(null);
   const [steps, setSteps] = useState(createInitialSteps);
+  const [phaseTimings, setPhaseTimings] = useState(/** @type {PhaseTiming[]} */ ([]));
+  const [currentPhase, setCurrentPhase] = useState(/** @type {PhaseName | null} */ (null));
 
   const runGenerate = useCallback(async () => {
     setLoading(true);
     setError(null);
     setSteps(createInitialSteps());
+    setPhaseTimings([]);
+    setCurrentPhase('git');
 
     try {
       const repo = await isGitRepo();
       if (!repo) throw new Error('Current directory is not a git repository.');
 
+      const nextPhaseTimings = [];
+
+      setCurrentPhase('git');
+      const gitStart = performance.now();
       const summaryInput = await getChangesForSummary();
+      nextPhaseTimings.push({name: 'git', durationMs: Math.round(performance.now() - gitStart)});
       const {nameStatus, patch, source, strategy} = summaryInput;
       if (!nameStatus || !patch) throw new Error('No changes found in staged or working tree.');
 
+      setCurrentPhase('prompt');
+      const promptStart = performance.now();
       const prompt = buildPrompt(summaryInput);
+      nextPhaseTimings.push({name: 'prompt', durationMs: Math.round(performance.now() - promptStart)});
+
+      setCurrentPhase('model');
+      const modelStart = performance.now();
       const generated = await generateSuggestion(prompt);
+      nextPhaseTimings.push({name: 'model', durationMs: Math.round(performance.now() - modelStart)});
+
       setSuggestion({title: formatTitle(generated), bullets: generated.bullets});
       setSummarySource(source);
       setSummaryStrategy(strategy);
+      setPhaseTimings(nextPhaseTimings);
       setMenuIndex(0);
     } catch (cause) {
       setSuggestion(null);
       setSummarySource(null);
       setSummaryStrategy(null);
+      setPhaseTimings([]);
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
+      setCurrentPhase(null);
       setLoading(false);
     }
   }, []);
@@ -771,6 +822,7 @@ function App() {
 
   const content = [h(Text, {key: 'title', color: 'cyan'}, 'gai · AI Commit Assistant')];
   if (loading) content.push(h(Text, {key: 'loading', color: 'yellow'}, '正在根据 Git 改动生成提交建议...'));
+  if (loading && currentPhase) content.push(h(Text, {key: 'phase-loading', color: 'gray'}, `当前阶段: ${getPhaseLabel(currentPhase)}`));
   if (submitting) content.push(h(Text, {key: 'submitting', color: 'yellow'}, '正在执行 git add / git commit / git push...'));
 
   if (!loading && suggestion) {
@@ -780,6 +832,9 @@ function App() {
       h(Text, {key: 'source', color: 'gray'}, `来源: ${summarySource === 'staged' ? '暂存区改动' : '工作区改动'}`),
       h(Text, {key: 'strategy', color: 'gray'}, `策略: ${summaryStrategy === 'incremental' ? '增量' : summaryStrategy === 'contextual' ? '增量 + 上下文' : '压缩摘要'}`),
       h(Text, {key: 'provider', color: 'gray'}, `Provider: ${getProviderLabel()}`),
+      h(Text, {key: 'timings-title', color: 'green'}, '阶段耗时'),
+      ...phaseTimings.map((item) => h(Text, {key: `timing-${item.name}`, color: 'gray'}, `${getPhaseLabel(item.name)}: ${item.durationMs}ms`)),
+      h(Text, {key: 'timings-total', color: 'gray'}, `总计: ${getTotalPhaseDuration(phaseTimings)}ms`),
       h(Text, {key: 'summary-label', color: 'green'}, '变更摘要')
     ];
 

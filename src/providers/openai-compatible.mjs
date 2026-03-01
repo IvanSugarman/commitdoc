@@ -9,6 +9,7 @@ import {buildFallbackSuggestion, parseSuggestion} from '../fallback-suggestion.m
  * @property {string} model 主模型。
  * @property {string} formatModel 二次格式化模型。
  * @property {boolean} disableThinking 是否关闭 thinking。
+ * @property {boolean} enableFormatFallback 是否启用二次格式化请求。
  */
 
 /**
@@ -34,7 +35,8 @@ export function createOpenAICompatibleConfig(overrides) {
     baseURL: overrides.baseURL || process.env.GAI_BASE_URL || 'https://api.openai.com/v1',
     model: overrides.model || process.env.GAI_MODEL || 'gpt-4.1-mini',
     formatModel: overrides.formatModel || process.env.GAI_FORMAT_MODEL || overrides.model || process.env.GAI_MODEL || 'gpt-4.1-mini',
-    disableThinking: overrides.disableThinking ?? (process.env.GAI_DISABLE_THINKING !== 'false')
+    disableThinking: overrides.disableThinking ?? (process.env.GAI_DISABLE_THINKING !== 'false'),
+    enableFormatFallback: overrides.enableFormatFallback ?? (process.env.GAI_ENABLE_FORMAT_FALLBACK === 'true')
   };
 }
 
@@ -154,7 +156,7 @@ export async function generateWithOpenAICompatible(config, prompt) {
     const message = await requestMessage(client, config, config.model, prompt, 800);
     let text = extractMessageText(message);
 
-    if (!text && typeof message.reasoning_content === 'string' && message.reasoning_content.trim()) {
+    if (config.enableFormatFallback && !text && typeof message.reasoning_content === 'string' && message.reasoning_content.trim()) {
       text = await formatFromReasoning(client, config, message.reasoning_content.trim());
     }
 

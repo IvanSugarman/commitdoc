@@ -354,15 +354,12 @@ function buildStrategyPatch(patches, strategy) {
  * @return {Promise<SummaryChanges>} 结构化变更数据。
  */
 export async function getChangesForSummary() {
-  const stagedNameStatus = await getStagedNameStatus();
-  const stagedPatch = await getStagedPatch();
+  const [stagedNameStatus, stagedPatch] = await Promise.all([getStagedNameStatus(), getStagedPatch()]);
   if (stagedNameStatus && stagedPatch) {
     return buildAdaptiveSummary('staged', stagedNameStatus, stagedPatch);
   }
 
-  const workingNameStatus = await getWorkingTreeNameStatus();
-  const workingPatch = await getWorkingTreePatch();
-  const untrackedFiles = await getUntrackedFiles();
+  const [workingNameStatus, workingPatch, untrackedFiles] = await Promise.all([getWorkingTreeNameStatus(), getWorkingTreePatch(), getUntrackedFiles()]);
   const untrackedPatch = await buildUntrackedPseudoPatch(untrackedFiles);
   const mergedPatch = [workingPatch, untrackedPatch].filter(Boolean).join('\n\n');
 
@@ -379,9 +376,10 @@ export async function getChangesForSummary() {
 async function buildAdaptiveSummary(source, nameStatus, patch) {
   const allFiles = parseChangedFiles(nameStatus);
   const filteredFiles = allFiles.filter((item) => !isIgnoredFile(item.path));
-  const filteredPatches = splitPatchByFile(patch).filter((item) => !isIgnoredFile(item.path));
+  const patchSections = splitPatchByFile(patch);
+  const filteredPatches = patchSections.filter((item) => !isIgnoredFile(item.path));
   const files = filteredFiles.length > 0 ? filteredFiles : allFiles;
-  const patches = filteredPatches.length > 0 ? filteredPatches : splitPatchByFile(patch);
+  const patches = filteredPatches.length > 0 ? filteredPatches : patchSections;
   const highContextCount = files.filter((item) => isHighContextFile(item.path)).length;
   const strategy = decideStrategy(files, patch, highContextCount);
   const optimizedPatch = buildStrategyPatch(patches, strategy);

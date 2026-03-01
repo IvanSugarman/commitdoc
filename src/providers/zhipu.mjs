@@ -11,7 +11,8 @@ export function getZhipuConfig() {
     baseURL: process.env.GAI_BASE_URL || 'https://open.bigmodel.cn/api/coding/paas/v4',
     model: process.env.GAI_MODEL || 'glm-4.7',
     formatModel: process.env.GAI_FORMAT_MODEL || 'glm-4.7-flash',
-    disableThinking: process.env.GAI_DISABLE_THINKING !== 'false'
+    disableThinking: process.env.GAI_DISABLE_THINKING !== 'false',
+    enableFormatFallback: process.env.GAI_ENABLE_FORMAT_FALLBACK === 'true'
   });
 }
 
