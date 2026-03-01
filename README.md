@@ -12,9 +12,30 @@ npm link
 ## Usage
 
 ```bash
-cp .env.example .env
-# set provider config in .env
+gai profiles
 gai
+```
+
+## Profile Env
+
+The project now uses multi-file env profiles:
+
+- `.env/profiles/*.env` stores one model profile per file
+- `.env/active-profile` stores the current active profile name
+- `.env/active.env` is the runtime file loaded by the CLI
+- `.env/example.env` is the local example template
+
+Built-in profiles:
+
+- `zhipu-glm-4.7`
+- `openai-gpt-4.1-mini`
+- `openai-compatible-default`
+
+Switch profile with one command:
+
+```bash
+gai use zhipu-glm-4.7
+gai use openai-gpt-4.1-mini
 ```
 
 ## Shell Install
@@ -40,7 +61,7 @@ This command checks:
 - Node.js version
 - Git availability
 - current Git repository status
-- `.env` existence
+- `.env/active.env` existence
 - `GAI_API_KEY` availability
 - model and base URL config
 - `~/.zshrc` install status
@@ -74,6 +95,8 @@ This command interactively writes:
 - `GAI_DISABLE_THINKING`
 
 If a value is already configured, pressing enter keeps the current value.
+The command edits the current active profile file under `.env/profiles/` and then syncs `.env/active.env`.
+When you switch `GAI_PROVIDER`, the default `GAI_BASE_URL`, `GAI_MODEL`, `GAI_FORMAT_MODEL`, and `GAI_DISABLE_THINKING` values will automatically switch to that provider's defaults.
 
 ## Model Config
 

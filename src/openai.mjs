@@ -1,1 +1,6 @@
-export {generateSuggestion, getProviderName, getResolvedProviderConfig} from './providers/index.mjs';
+export {
+  generateSuggestion,
+  getProviderDefaults,
+  getProviderName,
+  getResolvedProviderConfig,
+} from "./providers/index.mjs";
