@@ -624,6 +624,32 @@ function getTotalPhaseDuration(timings) {
   return timings.reduce((total, item) => total + item.durationMs, 0);
 }
 
+/**
+ * @description 根据阶段返回动态加载文案。
+ * @param {PhaseName | null} phase 当前阶段。
+ * @param {number} frameIndex 动画帧索引。
+ * @return {string} 加载提示文案。
+ */
+function getLoadingMessage(phase, frameIndex) {
+  /** @type {string[]} */
+  const frames = ['.', '..', '...'];
+  const suffix = frames[frameIndex % frames.length];
+
+  if (phase === 'git') {
+    return `正在扫描 Git 变更${suffix}`;
+  }
+
+  if (phase === 'prompt') {
+    return `正在整理变更语义${suffix}`;
+  }
+
+  if (phase === 'model') {
+    return `正在生成提交建议${suffix}`;
+  }
+
+  return `正在处理${suffix}`;
+}
+
 function TokenDoctorApp() {
   const {exit} = useApp();
   const [result, setResult] = useState(null);
@@ -778,6 +804,7 @@ function App() {
   const [steps, setSteps] = useState(createInitialSteps);
   const [phaseTimings, setPhaseTimings] = useState(/** @type {PhaseTiming[]} */ ([]));
   const [currentPhase, setCurrentPhase] = useState(/** @type {PhaseName | null} */ (null));
+  const [loadingFrame, setLoadingFrame] = useState(0);
 
   const runGenerate = useCallback(async () => {
     setLoading(true);
@@ -833,6 +860,21 @@ function App() {
     runGenerate();
   }, [runGenerate]);
 
+  useEffect(() => {
+    if (!loading) {
+      setLoadingFrame(0);
+      return;
+    }
+
+    const timer = setInterval(() => {
+      setLoadingFrame((current) => (current + 1) % 3);
+    }, 300);
+
+    return () => {
+      clearInterval(timer);
+    };
+  }, [loading]);
+
   const confirmAndPush = useCallback(async () => {
     if (!suggestion) return;
     setSubmitting(true);
@@ -886,7 +928,7 @@ function App() {
   });
 
   const content = [h(Text, {key: 'title', color: 'cyan'}, 'gai · AI Commit Assistant')];
-  if (loading) content.push(h(Text, {key: 'loading', color: 'yellow'}, '正在根据 Git 改动生成提交建议...'));
+  if (loading) content.push(h(Text, {key: 'loading', color: 'yellow'}, getLoadingMessage(currentPhase, loadingFrame)));
   if (loading && currentPhase) content.push(h(Text, {key: 'phase-loading', color: 'gray'}, `当前阶段: ${getPhaseLabel(currentPhase)}`));
   if (submitting) content.push(h(Text, {key: 'submitting', color: 'yellow'}, '正在执行 git add / git commit / git push...'));
 
