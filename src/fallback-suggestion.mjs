@@ -290,6 +290,10 @@ function inferFocus(files, keywords) {
   const joinedPaths = files.map((item) => item.path.toLowerCase()).join(' ');
   const joinedKeywords = keywords.join(' ');
 
+  if (/(prompt|summary|semantic|subject|bullet|fallback|parser|json)/.test(joinedPaths + joinedKeywords)) {
+    return '摘要生成逻辑';
+  }
+
   if (/(timing|duration|performance|latency|slow|cache)/.test(joinedKeywords)) {
     return '生成性能';
   }
@@ -310,15 +314,47 @@ function inferFocus(files, keywords) {
     return '提交流程';
   }
 
-  if (/(prompt|summary|fallback|parser|json)/.test(joinedPaths + joinedKeywords)) {
-    return '摘要生成逻辑';
-  }
-
   if (/(cli|ink)/.test(joinedPaths)) {
     return '终端交互体验';
   }
 
   return '代码变更总结';
+}
+
+/**
+ * @description 推断变更带来的主要价值。
+ * @param {string} focus 主题焦点。
+ * @param {string[]} keywords 关键词列表。
+ * @return {string} 价值描述。
+ */
+function inferValue(focus, keywords) {
+  const joinedKeywords = keywords.join(' ');
+
+  if (/(timing|duration|performance|latency|slow|cache)/i.test(joinedKeywords)) {
+    return '执行性能';
+  }
+
+  if (/(parser|json|fallback|reasoning|format)/i.test(joinedKeywords)) {
+    return '结果解析稳定性';
+  }
+
+  if (/(prompt|summary|semantic|subject|bullet)/i.test(joinedKeywords)) {
+    return '语义概括能力';
+  }
+
+  if (/(doctor|token|metric|duration)/i.test(joinedKeywords)) {
+    return '诊断可观测性';
+  }
+
+  if (/(provider|model|openai|zhipu|glm)/i.test(joinedKeywords)) {
+    return '模型调用稳定性';
+  }
+
+  if (focus === '终端交互体验') {
+    return '交互反馈一致性';
+  }
+
+  return '稳定性与可维护性';
 }
 
 /**
@@ -330,15 +366,15 @@ function inferFocus(files, keywords) {
  */
 function inferSubject(files, keywords, type) {
   const focus = inferFocus(files, keywords);
+  const value = inferValue(focus, keywords);
   const fileNames = getTopFileNames(files);
   /** @type {string} */
   let subject = '';
 
-  if (keywords.length > 0) {
-    const keywordText = keywords.slice(0, 2).join(' / ');
-    subject = `${type === 'fix' ? '修正' : type === 'feat' ? '优化' : '调整'}${focus}中的 ${keywordText}`;
+  if (keywords.length > 0 || fileNames.length > 0) {
+    subject = `${type === 'fix' ? '修正' : type === 'feat' ? '增强' : '调整'}${focus}的${value}`;
   } else if (fileNames.length > 0) {
-    subject = `${type === 'fix' ? '修正' : type === 'feat' ? '优化' : '调整'}${fileNames.join('、')} 相关逻辑`;
+    subject = `${type === 'fix' ? '修正' : type === 'feat' ? '增强' : '调整'}${focus}相关能力`;
   } else {
     subject = `更新 gai ${focus}`;
   }
@@ -358,13 +394,13 @@ function inferBullets(files, lines, keywords, focus) {
   /** @type {string[]} */
   const bullets = [];
   const fileNames = getTopFileNames(files, 3);
+  const value = inferValue(focus, keywords);
+  const keywordText = keywords.slice(0, 3).join(' / ');
 
-  if (fileNames.length > 0) {
-    bullets.push(`调整 ${fileNames.join('、')} 的实现细节`);
-  }
+  bullets.push(`围绕 ${focus} 做集中调整，重点提升 ${value}`);
 
-  if (keywords.length > 0) {
-    bullets.push(`补充 ${keywords.slice(0, 3).join(' / ')} 相关处理逻辑`);
+  if (keywordText) {
+    bullets.push(`将 ${keywordText} 等改动收敛为更高层的语义描述`);
   }
 
   if (lines.length > 0) {
@@ -374,17 +410,21 @@ function inferBullets(files, lines, keywords, focus) {
       .slice(0, 36);
 
     if (sample) {
-      bullets.push(`围绕 ${sample} 调整 ${focus}`);
+      bullets.push(`主要变更围绕 ${sample} 等逻辑展开，并直接影响 ${focus}`);
     }
   }
 
   const statusSummary = files.map((item) => item.status).join('');
   if (/A/.test(statusSummary)) {
-    bullets.push(`新增与 ${focus} 相关的补充逻辑`);
+    bullets.push(`新增实现主要服务于 ${focus} 的能力补齐`);
   } else if (/D/.test(statusSummary)) {
-    bullets.push(`清理与 ${focus} 相关的冗余实现`);
+    bullets.push(`移除冗余实现以简化 ${focus} 的处理链路`);
   } else {
-    bullets.push(`细化 ${focus} 的边界处理`);
+    bullets.push(`同步细化 ${focus} 的边界与一致性处理`);
+  }
+
+  if (fileNames.length > 0) {
+    bullets.push(`改动主要落在 ${fileNames.join('、')}，但语义焦点保持在 ${focus}`);
   }
 
   return Array.from(new Set(bullets)).slice(0, 4);
