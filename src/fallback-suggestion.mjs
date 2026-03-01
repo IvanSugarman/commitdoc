@@ -12,22 +12,62 @@
  * @property {string} kind 文件类别。
  */
 
+/** @type {Set<string>} */
+const ALLOWED_TYPES = new Set(['feat', 'fix', 'chore']);
+
+/** @type {Set<string>} */
+const PATCH_STOP_WORDS = new Set([
+  'const',
+  'return',
+  'import',
+  'from',
+  'export',
+  'default',
+  'function',
+  'class',
+  'await',
+  'async',
+  'true',
+  'false',
+  'null',
+  'undefined',
+  'string',
+  'number',
+  'object',
+  'array',
+  'value',
+  'props',
+  'state',
+  'title',
+  'subject',
+  'bullets',
+  'json',
+  'prompt',
+  'patch',
+  'line',
+  'lines',
+  'color',
+  'margin',
+  'padding'
+]);
+
 /**
  * @description 解析模型返回 JSON。
  * @param {string} raw 模型原始文本。
  * @return {CommitSuggestion} 结构化提交建议。
  */
 export function parseSuggestion(raw) {
-  const parsed = JSON.parse(raw);
+  const normalized = normalizeRawResponse(raw);
+  const candidate = extractJsonCandidate(normalized);
+  const parsed = JSON.parse(candidate);
 
   if (!parsed || typeof parsed !== 'object') {
     throw new Error('Invalid model response: not an object');
   }
 
   const data = /** @type {Record<string, unknown>} */ (parsed);
-  const allowedTypes = new Set(['feat', 'fix', 'chore']);
 
-  if (!allowedTypes.has(String(data.type))) {
+  if (!ALLOWED_TYPES.has(String(data.type))) {
     throw new Error('Invalid model response: unsupported type');
   }
 
@@ -50,6 +90,65 @@ export function parseSuggestion(raw) {
     subject: data.subject.trim().slice(0, 50),
     bullets
   };
+}
+
+/**
+ * @description 清理模型原始文本中的围栏与多余空白。
+ * @param {string} raw 模型原始文本。
+ * @return {string} 归一化后的文本。
+ */
+function normalizeRawResponse(raw) {
+  return raw
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+}
+
+/**
+ * @description 从自由文本中提取最后一个完整 JSON 对象。
+ * @param {string} text 归一化后的模型文本。
+ * @return {string} JSON 字符串。
+ */
+function extractJsonCandidate(text) {
+  if (text.startsWith('{') && text.endsWith('}')) {
+    return text;
+  }
+
+  /** @type {string[]} */
+  const candidates = [];
+  let depth = 0;
+  let start = -1;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (char === '{') {
+      if (depth === 0) {
+        start = index;
+      }
+      depth += 1;
+      continue;
+    }
+
+    if (char === '}') {
+      if (depth === 0) {
+        continue;
+      }
+
+      depth -= 1;
+      if (depth === 0 && start !== -1) {
+        candidates.push(text.slice(start, index + 1));
+        start = -1;
+      }
+    }
+  }
+
+  if (candidates.length > 0) {
+    return candidates.at(-1) || '';
+  }
+
+  throw new Error('Invalid model response: JSON object not found');
 }
 
 /**
@@ -91,11 +190,11 @@ function parseFileSummary(summary) {
  * @return {'feat'|'fix'|'chore'} 推断后的提交类型。
  */
 function inferType(text) {
-  if (/(fix|bug|error|兼容|修复|兜底|fallback|empty model output|异常)/i.test(text)) {
+  if (/(fix|bug|error|fail|crash|兼容|修复|兜底|fallback|异常|回退|cache invalidation)/i.test(text)) {
     return 'fix';
   }
 
-  if (/(add|implement|support|introduce|新增|实现|支持|引入|增强|优化|adaptive|strategy|doctor|config|install|provider|plugin)/i.test(text)) {
+  if (/(add|implement|support|introduce|新增|实现|支持|引入|增强|优化|cache|timing|profile|provider|token|doctor|config|install|plugin)/i.test(text)) {
     return 'feat';
   }
 
@@ -103,74 +202,192 @@ function inferType(text) {
 }
 
 /**
- * @description 根据文件特征挑选主题。
- * @param {FileSummaryItem[]} files 文件摘要列表。
- * @return {string} 中文主题。
+ * @description 从补丁中提取有效变更行。
+ * @param {string} patch 补丁文本。
+ * @return {string[]} 变更行数组。
  */
-function inferSubject(files) {
-  const joined = files.map((item) => item.path.toLowerCase()).join(' ');
-
-  if (/(provider|providers)/.test(joined)) {
-    return '重构 gai 模型 Provider 架构';
-  }
-
-  if (/(doctor|config|install|zshrc|\.env)/.test(joined)) {
-    return '完善 gai 配置与安装流程';
-  }
-
-  if (/(git\.mjs|prompt\.mjs|openai\.mjs|cli\.mjs)/.test(joined)) {
-    return '实现 gai 自适应摘要策略';
-  }
-
-  if (/(openai|model|prompt)/.test(joined)) {
-    return '优化 gai 模型摘要流程';
-  }
-
-  if (/(cli|ink)/.test(joined)) {
-    return '增强 gai 终端交互体验';
-  }
-
-  if (/(readme|docs?)/.test(joined)) {
-    return '更新 gai 文档说明';
-  }
-
-  return '更新 gai 提交流程';
+function getMeaningfulPatchLines(patch) {
+  return patch
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => /^[+-]/.test(line))
+    .filter((line) => !/^\+\+\+|^---|^@@/.test(line))
+    .map((line) => line.slice(1).trim())
+    .filter(Boolean)
+    .slice(0, 240);
 }
 
 /**
- * @description 根据文件摘要生成要点。
+ * @description 从变更行中提取关键词频次。
+ * @param {string[]} lines 变更行数组。
+ * @return {Map<string, {count: number; label: string}>} 关键词频次表。
+ */
+function collectPatchKeywords(lines) {
+  /** @type {Map<string, {count: number; label: string}>} */
+  const frequency = new Map();
+
+  lines.forEach((line) => {
+    const words = line.match(/[A-Za-z][A-Za-z0-9._/-]{2,}/g) || [];
+    words.forEach((word) => {
+      const normalized = word.toLowerCase();
+      if (PATCH_STOP_WORDS.has(normalized)) {
+        return;
+      }
+
+      const current = frequency.get(normalized);
+      if (current) {
+        current.count += 1;
+        return;
+      }
+
+      frequency.set(normalized, {count: 1, label: word});
+    });
+  });
+
+  return frequency;
+}
+
+/**
+ * @description 获取高频关键词列表。
+ * @param {Map<string, {count: number; label: string}>} frequency 关键词频次表。
+ * @param {number} limit 最大数量。
+ * @return {string[]} 关键词数组。
+ */
+function getTopKeywords(frequency, limit = 4) {
+  return Array.from(frequency.entries())
+    .sort((left, right) => {
+      if (right[1].count !== left[1].count) {
+        return right[1].count - left[1].count;
+      }
+
+      return left[0].localeCompare(right[0]);
+    })
+    .map(([, value]) => value.label)
+    .slice(0, limit);
+}
+
+/**
+ * @description 提取最具代表性的文件名。
  * @param {FileSummaryItem[]} files 文件摘要列表。
+ * @param {number} limit 最大数量。
+ * @return {string[]} 文件名数组。
+ */
+function getTopFileNames(files, limit = 2) {
+  return files
+    .map((item) => item.path.split('/').at(-1) || item.path)
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+/**
+ * @description 基于路径与关键词判断主题焦点。
+ * @param {FileSummaryItem[]} files 文件摘要列表。
+ * @param {string[]} keywords 关键词列表。
+ * @return {string} 主题焦点。
+ */
+function inferFocus(files, keywords) {
+  const joinedPaths = files.map((item) => item.path.toLowerCase()).join(' ');
+  const joinedKeywords = keywords.join(' ');
+
+  if (/(timing|duration|performance|latency|slow|cache)/.test(joinedKeywords)) {
+    return '生成性能';
+  }
+
+  if (/(provider|model|openai|zhipu|glm)/.test(joinedPaths + joinedKeywords)) {
+    return '模型调用流程';
+  }
+
+  if (/(doctor|token)/.test(joinedPaths + joinedKeywords)) {
+    return '诊断与统计输出';
+  }
+
+  if (/(config|profile|zshrc|\.env)/.test(joinedPaths + joinedKeywords)) {
+    return '配置切换流程';
+  }
+
+  if (/(commit|push|stage|git)/.test(joinedPaths + joinedKeywords)) {
+    return '提交流程';
+  }
+
+  if (/(prompt|summary|fallback|parser|json)/.test(joinedPaths + joinedKeywords)) {
+    return '摘要生成逻辑';
+  }
+
+  if (/(cli|ink)/.test(joinedPaths)) {
+    return '终端交互体验';
+  }
+
+  return '代码变更总结';
+}
+
+/**
+ * @description 生成更细粒度的中文主题。
+ * @param {FileSummaryItem[]} files 文件摘要列表。
+ * @param {string[]} keywords 关键词列表。
+ * @param {'feat'|'fix'|'chore'} type 提交类型。
+ * @return {string} 中文主题。
+ */
+function inferSubject(files, keywords, type) {
+  const focus = inferFocus(files, keywords);
+  const fileNames = getTopFileNames(files);
+  /** @type {string} */
+  let subject = '';
+
+  if (keywords.length > 0) {
+    const keywordText = keywords.slice(0, 2).join(' / ');
+    subject = `${type === 'fix' ? '修正' : type === 'feat' ? '优化' : '调整'}${focus}中的 ${keywordText}`;
+  } else if (fileNames.length > 0) {
+    subject = `${type === 'fix' ? '修正' : type === 'feat' ? '优化' : '调整'}${fileNames.join('、')} 相关逻辑`;
+  } else {
+    subject = `更新 gai ${focus}`;
+  }
+
+  return subject.slice(0, 30);
+}
+
+/**
+ * @description 根据文件与补丁生成更动态的要点。
+ * @param {FileSummaryItem[]} files 文件摘要列表。
+ * @param {string[]} lines 变更行数组。
+ * @param {string[]} keywords 关键词列表。
+ * @param {string} focus 主题焦点。
  * @return {string[]} 中文摘要要点。
  */
-function inferBullets(files) {
+function inferBullets(files, lines, keywords, focus) {
+  /** @type {string[]} */
   const bullets = [];
-  const joined = files.map((item) => item.path.toLowerCase()).join(' ');
+  const fileNames = getTopFileNames(files, 3);
 
-  if (/(providers|openai-compatible|zhipu|openai)/.test(joined)) {
-    bullets.push('拆分模型 Provider 适配层，支持后续扩展更多模型服务');
+  if (fileNames.length > 0) {
+    bullets.push(`调整 ${fileNames.join('、')} 的实现细节`);
   }
 
-  if (/(git\.mjs)/.test(joined)) {
-    bullets.push('优化 Git 改动提取、过滤与压缩策略');
+  if (keywords.length > 0) {
+    bullets.push(`补充 ${keywords.slice(0, 3).join(' / ')} 相关处理逻辑`);
   }
 
-  if (/(prompt\.mjs)/.test(joined)) {
-    bullets.push('调整 Prompt 结构，突出文件摘要与上下文信息');
+  if (lines.length > 0) {
+    const sample = lines
+      .find((line) => !/^\s*(import|export)\b/.test(line))
+      ?.replace(/\s+/g, ' ')
+      .slice(0, 36);
+
+    if (sample) {
+      bullets.push(`围绕 ${sample} 调整 ${focus}`);
+    }
   }
 
-  if (/(fallback|openai\.mjs|model)/.test(joined)) {
-    bullets.push('增强模型调用兼容处理与输出兜底能力');
+  const statusSummary = files.map((item) => item.status).join('');
+  if (/A/.test(statusSummary)) {
+    bullets.push(`新增与 ${focus} 相关的补充逻辑`);
+  } else if (/D/.test(statusSummary)) {
+    bullets.push(`清理与 ${focus} 相关的冗余实现`);
+  } else {
+    bullets.push(`细化 ${focus} 的边界处理`);
   }
 
-  if (/(cli\.mjs)/.test(joined)) {
-    bullets.push('在 CLI 中接入 Provider 配置与诊断展示');
-  }
-
-  if (/(readme|docs?)/.test(joined)) {
-    bullets.push('同步更新文档，说明多 Provider 配置方式');
-  }
-
-  return bullets.slice(0, 4).filter(Boolean);
+  return Array.from(new Set(bullets)).slice(0, 4);
 }
 
 /**
@@ -181,12 +398,17 @@ function inferBullets(files) {
  */
 export function buildFallbackSuggestion(prompt, reasoning) {
   const files = parseFileSummary(extractSection(prompt, 'FILE_SUMMARY'));
-  const sourceText = `${prompt}\n${reasoning}`;
-  const bullets = inferBullets(files);
+  const patch = extractSection(prompt, 'PATCH');
+  const lines = getMeaningfulPatchLines(patch);
+  const keywords = getTopKeywords(collectPatchKeywords(lines));
+  const sourceText = `${prompt}\n${reasoning}\n${lines.join('\n')}`;
+  const type = inferType(sourceText);
+  const focus = inferFocus(files, keywords);
+  const bullets = inferBullets(files, lines, keywords, focus);
 
   return {
-    type: inferType(sourceText),
-    subject: inferSubject(files),
-    bullets: bullets.length > 0 ? bullets : ['调整 gai 摘要与提交流程']
+    type,
+    subject: inferSubject(files, keywords, type),
+    bullets: bullets.length > 0 ? bullets : [`调整 gai ${focus}`]
   };
 }
