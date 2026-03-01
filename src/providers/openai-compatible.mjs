@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import {buildFallbackSuggestion, parseSuggestion} from '../fallback-suggestion.mjs';
+import {serializeModelResponse, writeModelLog} from '../model-log.mjs';
 
 /**
  * @typedef {Object} ProviderConfig
@@ -8,7 +9,7 @@ import {buildFallbackSuggestion, parseSuggestion} from '../fallback-suggestion.m
  * @property {string} baseURL 基础地址。
  * @property {string} model 主模型。
  * @property {string} formatModel 二次格式化模型。
- * @property {boolean} disableThinking 是否关闭 thinking。
+ * @property {boolean} enableThinking 是否启用 thinking。
  * @property {boolean} enableFormatFallback 是否启用二次格式化请求。
  */
 
@@ -16,6 +17,16 @@ import {buildFallbackSuggestion, parseSuggestion} from '../fallback-suggestion.m
  * @typedef {Object} ProviderMessage
  * @property {unknown} [content] 模型输出内容。
  * @property {unknown} [reasoning_content] 推理内容。
+ */
+
+/**
+ * @typedef {'model'|'zhipu-reasoning'|'fallback-empty-response'|'fallback-parse-failed'} GenerationMode
+ */
+
+/**
+ * @typedef {Object} GenerationResult
+ * @property {import('../fallback-suggestion.mjs').CommitSuggestion} suggestion 提交建议。
+ * @property {GenerationMode} mode 生成模式。
  */
 
 /**
@@ -29,13 +40,15 @@ export function createOpenAICompatibleConfig(overrides) {
     throw new Error('GAI_API_KEY is required for the configured model provider');
   }
 
+  const enableThinking = overrides.enableThinking ?? (process.env.GAI_ENABLE_THINKING === 'true' || process.env.GAI_DISABLE_THINKING === 'false');
+
   return {
     provider: overrides.provider || 'openai-compatible',
     apiKey,
     baseURL: overrides.baseURL || process.env.GAI_BASE_URL || 'https://api.openai.com/v1',
     model: overrides.model || process.env.GAI_MODEL || 'gpt-4.1-mini',
     formatModel: overrides.formatModel || process.env.GAI_FORMAT_MODEL || overrides.model || process.env.GAI_MODEL || 'gpt-4.1-mini',
-    disableThinking: overrides.disableThinking ?? (process.env.GAI_DISABLE_THINKING !== 'false'),
+    enableThinking,
     enableFormatFallback: overrides.enableFormatFallback ?? (process.env.GAI_ENABLE_FORMAT_FALLBACK === 'true')
   };
 }
@@ -50,28 +63,62 @@ export function createOpenAICompatibleConfig(overrides) {
  * @return {Promise<ProviderMessage>} 模型消息对象。
  */
 async function requestMessage(client, config, model, prompt, maxTokens) {
-  const response = await client.chat.completions.create({
+  const requestBody = {
     model,
     temperature: 0.1,
     max_tokens: maxTokens,
-    ...(config.disableThinking
+    response_format: {
+      type: 'json_object'
+    },
+    ...(config.enableThinking
       ? {
           extra_body: {
             thinking: {
-              type: 'disabled'
+              type: 'enabled'
             }
           }
         }
       : {}),
     messages: [
       {
+        role: 'system',
+        content: [
+          'You are generating a git commit summary.',
+          'Return exactly one valid JSON object.',
+          'The JSON object must contain keys: type, subject, bullets.',
+          'type must be one of feat, fix, chore.',
+          'subject must be concise Chinese.',
+          'bullets must be an array of 2-4 short Chinese strings.',
+          'Do not wrap JSON in markdown fences.',
+          'Do not output any extra explanation.'
+        ].join('\n')
+      },
+      {
         role: 'user',
         content: prompt
       }
     ]
-  });
+  };
 
-  return response.choices?.[0]?.message || {};
+  try {
+    const response = await client.chat.completions.create(requestBody);
+    await writeModelLog({
+      provider: config.provider,
+      baseURL: config.baseURL,
+      request: requestBody,
+      response: serializeModelResponse(response)
+    });
+
+    return response.choices?.[0]?.message || {};
+  } catch (error) {
+    await writeModelLog({
+      provider: config.provider,
+      baseURL: config.baseURL,
+      request: requestBody,
+      error: error instanceof Error ? {message: error.message, stack: error.stack || ''} : {message: String(error)}
+    });
+    throw error;
+  }
 }
 
 /**
@@ -147,7 +194,7 @@ async function formatFromReasoning(client, config, reasoning) {
  * @description 使用 OpenAI 兼容协议生成提交建议。
  * @param {ProviderConfig} config Provider 配置。
  * @param {string} prompt 输入提示词。
- * @return {Promise<import('../fallback-suggestion.mjs').CommitSuggestion>} 提交建议。
+ * @return {Promise<GenerationResult>} 提交建议与生成模式。
  */
 export async function generateWithOpenAICompatible(config, prompt) {
   const client = new OpenAI({
@@ -165,13 +212,22 @@ export async function generateWithOpenAICompatible(config, prompt) {
 
     if (text) {
       try {
-        return parseSuggestion(text);
+        return {
+          suggestion: parseSuggestion(text),
+          mode: 'model'
+        };
       } catch {
-        return buildFallbackSuggestion(prompt, typeof message.reasoning_content === 'string' ? message.reasoning_content : '');
+        return {
+          suggestion: buildFallbackSuggestion(prompt, typeof message.reasoning_content === 'string' ? message.reasoning_content : ''),
+          mode: 'fallback-parse-failed'
+        };
       }
     }
 
-    return buildFallbackSuggestion(prompt, typeof message.reasoning_content === 'string' ? message.reasoning_content : '');
+    return {
+      suggestion: buildFallbackSuggestion(prompt, typeof message.reasoning_content === 'string' ? message.reasoning_content : ''),
+      mode: 'fallback-empty-response'
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Model request failed: ${message}`);

@@ -12,7 +12,7 @@ import React, {useCallback, useEffect, useMemo, useState} from 'react';
 import {Box, Text, render, useApp, useInput} from 'ink';
 import {applyCommitAndPush, getChangesForSummary, isGitRepo} from './git.mjs';
 import {generateSuggestion, getProviderDefaults, getProviderName, getResolvedProviderConfig} from './openai.mjs';
-import {buildPrompt} from './prompt.mjs';
+import {buildPrompt, buildZhipuPrompt} from './prompt.mjs';
 
 /** @type {(file: string, args: string[]) => Promise<{stdout: string; stderr: string}>} */
 const execFileAsync = promisify(execFile);
@@ -55,14 +55,14 @@ const INSTALL_BLOCK_START = '# GAI_CLI:START';
 /** @type {string} */
 const INSTALL_BLOCK_END = '# GAI_CLI:END';
 
-/** @type {{ GAI_PROVIDER: string; GAI_API_KEY: string; GAI_BASE_URL: string; GAI_MODEL: string; GAI_FORMAT_MODEL: string; GAI_DISABLE_THINKING: string }} */
+/** @type {{ GAI_PROVIDER: string; GAI_API_KEY: string; GAI_BASE_URL: string; GAI_MODEL: string; GAI_FORMAT_MODEL: string; GAI_ENABLE_THINKING: string }} */
 const DEFAULT_ENV = {
   GAI_PROVIDER: 'zhipu',
   GAI_API_KEY: '',
   GAI_BASE_URL: 'https://open.bigmodel.cn/api/coding/paas/v4',
   GAI_MODEL: 'glm-4.7',
   GAI_FORMAT_MODEL: 'glm-4.7-flash',
-  GAI_DISABLE_THINKING: 'true'
+  GAI_ENABLE_THINKING: 'false'
 };
 
 /**
@@ -93,6 +93,7 @@ const DEFAULT_ENV = {
  * @property {number} highContextFileCount 高上下文文件数。
  * @property {number} nameStatusChars 文件状态字符数。
  * @property {number} fileSummaryChars 文件摘要字符数。
+ * @property {number} filesOverviewChars 文件概览字符数。
  * @property {number} contextSummaryChars 上下文字符数。
  * @property {number} patchChars 补丁字符数。
  * @property {number} promptChars Prompt 字符数。
@@ -103,6 +104,10 @@ const DEFAULT_ENV = {
 
 /**
  * @typedef {'git'|'prompt'|'model'} PhaseName
+ */
+
+/**
+ * @typedef {'model'|'zhipu-reasoning'|'fallback-empty-response'|'fallback-parse-failed'} GenerationMode
  */
 
 /**
@@ -155,7 +160,7 @@ function parseEnvContent(content) {
 /**
  * @description 构建 env 文件内容，同时保留非 gai 配置。
  * @param {Record<string, string>} current 当前 env 配置。
- * @param {{ GAI_PROVIDER: string; GAI_API_KEY: string; GAI_BASE_URL: string; GAI_MODEL: string; GAI_FORMAT_MODEL: string; GAI_DISABLE_THINKING: string }} next 下一版配置。
+ * @param {{ GAI_PROVIDER: string; GAI_API_KEY: string; GAI_BASE_URL: string; GAI_MODEL: string; GAI_FORMAT_MODEL: string; GAI_ENABLE_THINKING: string }} next 下一版配置。
  * @return {string} 新的 env 文件内容。
  */
 function buildEnvFileContent(current, next) {
@@ -163,7 +168,7 @@ function buildEnvFileContent(current, next) {
   const preserved = [];
 
   Object.entries(current).forEach(([key, value]) => {
-    if (!['GAI_PROVIDER', 'GAI_API_KEY', 'GAI_BASE_URL', 'GAI_MODEL', 'GAI_FORMAT_MODEL', 'GAI_DISABLE_THINKING'].includes(key)) {
+    if (!['GAI_PROVIDER', 'GAI_API_KEY', 'GAI_BASE_URL', 'GAI_MODEL', 'GAI_FORMAT_MODEL', 'GAI_ENABLE_THINKING', 'GAI_DISABLE_THINKING'].includes(key)) {
       preserved.push(`${key}=${value}`);
     }
   });
@@ -174,9 +179,26 @@ function buildEnvFileContent(current, next) {
     `GAI_BASE_URL=${next.GAI_BASE_URL}`,
     `GAI_MODEL=${next.GAI_MODEL}`,
     `GAI_FORMAT_MODEL=${next.GAI_FORMAT_MODEL}`,
-    `GAI_DISABLE_THINKING=${next.GAI_DISABLE_THINKING}`,
+    `GAI_ENABLE_THINKING=${next.GAI_ENABLE_THINKING}`,
     ...preserved
   ].join('\n') + '\n';
+}
+
+/**
+ * @description 从现有配置中读取 thinking 开关，兼容旧字段。
+ * @param {Record<string, string>} config 配置对象。
+ * @return {string} thinking 开关字符串。
+ */
+function resolveEnableThinking(config) {
+  if (typeof config.GAI_ENABLE_THINKING === 'string' && config.GAI_ENABLE_THINKING.length > 0) {
+    return config.GAI_ENABLE_THINKING;
+  }
+
+  if (typeof config.GAI_DISABLE_THINKING === 'string' && config.GAI_DISABLE_THINKING.length > 0) {
+    return config.GAI_DISABLE_THINKING === 'true' ? 'false' : 'true';
+  }
+
+  return DEFAULT_ENV.GAI_ENABLE_THINKING;
 }
 
 /**
@@ -221,7 +243,7 @@ async function ensureProfileStorage() {
       GAI_BASE_URL: currentEnv.GAI_BASE_URL || DEFAULT_ENV.GAI_BASE_URL,
       GAI_MODEL: currentEnv.GAI_MODEL || DEFAULT_ENV.GAI_MODEL,
       GAI_FORMAT_MODEL: currentEnv.GAI_FORMAT_MODEL || DEFAULT_ENV.GAI_FORMAT_MODEL,
-      GAI_DISABLE_THINKING: currentEnv.GAI_DISABLE_THINKING || DEFAULT_ENV.GAI_DISABLE_THINKING
+      GAI_ENABLE_THINKING: resolveEnableThinking(currentEnv)
     });
     await writeFile(profilePath, content, 'utf8');
   }
@@ -284,7 +306,7 @@ async function syncProfileToEnv(profileName) {
     GAI_BASE_URL: profileConfig.GAI_BASE_URL || DEFAULT_ENV.GAI_BASE_URL,
     GAI_MODEL: profileConfig.GAI_MODEL || DEFAULT_ENV.GAI_MODEL,
     GAI_FORMAT_MODEL: profileConfig.GAI_FORMAT_MODEL || DEFAULT_ENV.GAI_FORMAT_MODEL,
-    GAI_DISABLE_THINKING: profileConfig.GAI_DISABLE_THINKING || DEFAULT_ENV.GAI_DISABLE_THINKING
+    GAI_ENABLE_THINKING: resolveEnableThinking(profileConfig)
   });
   await writeFile(ACTIVE_ENV_PATH, content, 'utf8');
   await writeFile(ACTIVE_PROFILE_PATH, `${profileName}\n`, 'utf8');
@@ -437,7 +459,10 @@ async function runDoctor() {
     model: envConfig.GAI_MODEL || process.env.GAI_MODEL || DEFAULT_ENV.GAI_MODEL,
     formatModel: envConfig.GAI_FORMAT_MODEL || process.env.GAI_FORMAT_MODEL || DEFAULT_ENV.GAI_FORMAT_MODEL,
     baseURL: envConfig.GAI_BASE_URL || process.env.GAI_BASE_URL || DEFAULT_ENV.GAI_BASE_URL,
-    disableThinking: (envConfig.GAI_DISABLE_THINKING || process.env.GAI_DISABLE_THINKING || DEFAULT_ENV.GAI_DISABLE_THINKING) !== 'false'
+    enableThinking: resolveEnableThinking({
+      GAI_ENABLE_THINKING: envConfig.GAI_ENABLE_THINKING || process.env.GAI_ENABLE_THINKING || '',
+      GAI_DISABLE_THINKING: envConfig.GAI_DISABLE_THINKING || process.env.GAI_DISABLE_THINKING || ''
+    }) === 'true'
   };
   try {
     providerConfig = getResolvedProviderConfig();
@@ -447,7 +472,7 @@ async function runDoctor() {
 
   items.push({name: 'GAI_API_KEY', status: apiKey ? 'pass' : 'fail', detail: apiKey ? '已配置' : '缺少 GAI_API_KEY，可执行 gai config 设置'});
   items.push({name: 'Provider Config', status: providerName ? 'pass' : 'warn', detail: `provider=${providerName}, model=${providerConfig.model}, formatModel=${providerConfig.formatModel}`});
-  items.push({name: 'Provider Endpoint', status: providerConfig.baseURL ? 'pass' : 'warn', detail: `baseURL=${providerConfig.baseURL}, disableThinking=${providerConfig.disableThinking ? 'true' : 'false'}`});
+  items.push({name: 'Provider Endpoint', status: providerConfig.baseURL ? 'pass' : 'warn', detail: `baseURL=${providerConfig.baseURL}, enableThinking=${providerConfig.enableThinking ? 'true' : 'false'}`});
 
   try {
     const current = await readFile(ZSHRC_PATH, 'utf8');
@@ -484,6 +509,15 @@ function estimateTokens(chars) {
   return Math.ceil(chars / 3.2);
 }
 
+/**
+ * @description 根据当前 provider 选择实际使用的提示词。
+ * @param {import('./prompt.mjs').PromptInput} summary 摘要输入。
+ * @return {string} 最终提示词。
+ */
+function buildProviderPrompt(summary) {
+  return getProviderName() === 'zhipu' ? buildZhipuPrompt(summary) : buildPrompt(summary);
+}
+
 async function analyzeTokenUsage() {
   if (!(await isGitRepo())) {
     throw new Error('Current directory is not a git repository.');
@@ -494,7 +528,7 @@ async function analyzeTokenUsage() {
     throw new Error('No changes found in staged or working tree.');
   }
 
-  const prompt = buildPrompt(summary);
+  const prompt = buildProviderPrompt(summary);
   const notes = [];
 
   if (summary.ignoredFileCount > 0) {
@@ -522,6 +556,7 @@ async function analyzeTokenUsage() {
     highContextFileCount: summary.stats.highContextFileCount,
     nameStatusChars: summary.nameStatus.length,
     fileSummaryChars: summary.fileSummary.length,
+    filesOverviewChars: summary.filesOverview.length,
     contextSummaryChars: summary.contextSummary.length,
     patchChars: summary.patch.length,
     promptChars: prompt.length,
@@ -542,6 +577,31 @@ function getProviderLabel() {
   const provider = process.env.GAI_PROVIDER || 'zhipu';
   const model = process.env.GAI_MODEL || DEFAULT_ENV.GAI_MODEL;
   return `${provider} / ${model}`;
+}
+
+/**
+ * @description 获取生成方式标签。
+ * @param {GenerationMode | null} mode 生成模式。
+ * @return {string} 展示文案。
+ */
+function getGenerationModeLabel(mode) {
+  if (mode === 'model') {
+    return '模型直出';
+  }
+
+  if (mode === 'zhipu-reasoning') {
+    return '智谱 reasoning 解析';
+  }
+
+  if (mode === 'fallback-parse-failed') {
+    return 'Fallback（模型返回不可解析）';
+  }
+
+  if (mode === 'fallback-empty-response') {
+    return 'Fallback（模型未返回有效内容）';
+  }
+
+  return '未知';
 }
 
 /**
@@ -608,6 +668,7 @@ function TokenDoctorApp() {
       h(Text, {key: 'size-title', color: 'green'}, '体积统计'),
       h(Text, {key: 'name-status'}, `nameStatus chars: ${result.nameStatusChars}`),
       h(Text, {key: 'file-summary'}, `fileSummary chars: ${result.fileSummaryChars}`),
+      h(Text, {key: 'files-overview'}, `filesOverview chars: ${result.filesOverviewChars}`),
       h(Text, {key: 'context-summary'}, `contextSummary chars: ${result.contextSummaryChars}`),
       h(Text, {key: 'patch'}, `patch chars: ${result.patchChars}`),
       h(Text, {key: 'prompt'}, `prompt chars: ${result.promptChars}`),
@@ -634,7 +695,7 @@ async function runConfig() {
     const baseURL = await promptField(rl, '请输入 GAI_BASE_URL', providerChanged ? providerDefaults.baseURL : current.GAI_BASE_URL || providerDefaults.baseURL);
     const model = await promptField(rl, '请输入 GAI_MODEL', providerChanged ? providerDefaults.model : current.GAI_MODEL || providerDefaults.model);
     const formatModel = await promptField(rl, '请输入 GAI_FORMAT_MODEL', providerChanged ? providerDefaults.formatModel : current.GAI_FORMAT_MODEL || providerDefaults.formatModel);
-    const disableThinking = await promptField(rl, '请输入 GAI_DISABLE_THINKING', providerChanged ? String(providerDefaults.disableThinking) : current.GAI_DISABLE_THINKING || String(providerDefaults.disableThinking));
+    const enableThinking = await promptField(rl, '请输入 GAI_ENABLE_THINKING', providerChanged ? String(providerDefaults.enableThinking) : resolveEnableThinking(current));
 
     const nextConfig = {
       GAI_PROVIDER: provider,
@@ -642,7 +703,7 @@ async function runConfig() {
       GAI_BASE_URL: baseURL,
       GAI_MODEL: model,
       GAI_FORMAT_MODEL: formatModel,
-      GAI_DISABLE_THINKING: disableThinking
+      GAI_ENABLE_THINKING: enableThinking
     };
 
     await writeFile(getProfilePath(activeProfile), buildEnvFileContent({}, nextConfig), 'utf8');
@@ -713,6 +774,7 @@ function App() {
   const [submitting, setSubmitting] = useState(false);
   const [summarySource, setSummarySource] = useState(null);
   const [summaryStrategy, setSummaryStrategy] = useState(null);
+  const [generationMode, setGenerationMode] = useState(/** @type {GenerationMode | null} */ (null));
   const [steps, setSteps] = useState(createInitialSteps);
   const [phaseTimings, setPhaseTimings] = useState(/** @type {PhaseTiming[]} */ ([]));
   const [currentPhase, setCurrentPhase] = useState(/** @type {PhaseName | null} */ (null));
@@ -722,6 +784,7 @@ function App() {
     setError(null);
     setSteps(createInitialSteps());
     setPhaseTimings([]);
+    setGenerationMode(null);
     setCurrentPhase('git');
 
     try {
@@ -739,7 +802,7 @@ function App() {
 
       setCurrentPhase('prompt');
       const promptStart = performance.now();
-      const prompt = buildPrompt(summaryInput);
+      const prompt = buildProviderPrompt(summaryInput);
       nextPhaseTimings.push({name: 'prompt', durationMs: Math.round(performance.now() - promptStart)});
 
       setCurrentPhase('model');
@@ -747,15 +810,17 @@ function App() {
       const generated = await generateSuggestion(prompt);
       nextPhaseTimings.push({name: 'model', durationMs: Math.round(performance.now() - modelStart)});
 
-      setSuggestion({title: formatTitle(generated), bullets: generated.bullets});
+      setSuggestion({title: formatTitle(generated.suggestion), bullets: generated.suggestion.bullets});
       setSummarySource(source);
       setSummaryStrategy(strategy);
+      setGenerationMode(generated.mode);
       setPhaseTimings(nextPhaseTimings);
       setMenuIndex(0);
     } catch (cause) {
       setSuggestion(null);
       setSummarySource(null);
       setSummaryStrategy(null);
+      setGenerationMode(null);
       setPhaseTimings([]);
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -832,6 +897,7 @@ function App() {
       h(Text, {key: 'source', color: 'gray'}, `来源: ${summarySource === 'staged' ? '暂存区改动' : '工作区改动'}`),
       h(Text, {key: 'strategy', color: 'gray'}, `策略: ${summaryStrategy === 'incremental' ? '增量' : summaryStrategy === 'contextual' ? '增量 + 上下文' : '压缩摘要'}`),
       h(Text, {key: 'provider', color: 'gray'}, `Provider: ${getProviderLabel()}`),
+      h(Text, {key: 'generation-mode', color: generationMode === 'model' ? 'green' : generationMode === 'zhipu-reasoning' ? 'cyan' : 'yellow'}, `生成方式: ${getGenerationModeLabel(generationMode)}`),
       h(Text, {key: 'timings-title', color: 'green'}, '阶段耗时'),
       ...phaseTimings.map((item) => h(Text, {key: `timing-${item.name}`, color: 'gray'}, `${getPhaseLabel(item.name)}: ${item.durationMs}ms`)),
       h(Text, {key: 'timings-total', color: 'gray'}, `总计: ${getTotalPhaseDuration(phaseTimings)}ms`),

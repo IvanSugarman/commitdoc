@@ -12,7 +12,7 @@ import {getZhipuConfig, generateSuggestion as generateZhipuSuggestion} from './z
  * @property {string} baseURL 基础地址。
  * @property {string} model 默认模型。
  * @property {string} formatModel 默认格式化模型。
- * @property {boolean} disableThinking 是否默认关闭 thinking。
+ * @property {boolean} enableThinking 是否默认启用 thinking。
  * @property {boolean} enableFormatFallback 是否默认启用二次格式化请求。
  */
 
@@ -43,7 +43,7 @@ export function getProviderDefaults(providerName) {
       baseURL: 'https://api.openai.com/v1',
       model: 'gpt-4.1-mini',
       formatModel: 'gpt-4.1-mini',
-      disableThinking: true,
+      enableThinking: false,
       enableFormatFallback: false
     };
   }
@@ -54,7 +54,7 @@ export function getProviderDefaults(providerName) {
       baseURL: 'https://api.openai.com/v1',
       model: 'gpt-4.1-mini',
       formatModel: 'gpt-4.1-mini',
-      disableThinking: true,
+      enableThinking: false,
       enableFormatFallback: false
     };
   }
@@ -64,7 +64,7 @@ export function getProviderDefaults(providerName) {
     baseURL: 'https://open.bigmodel.cn/api/coding/paas/v4',
     model: 'glm-4.7',
     formatModel: 'glm-4.7-flash',
-    disableThinking: true,
+    enableThinking: false,
     enableFormatFallback: false
   };
 }
@@ -92,7 +92,7 @@ export function getResolvedProviderConfig() {
 /**
  * @description 根据当前 Provider 生成提交建议。
  * @param {string} prompt 输入提示词。
- * @return {Promise<import('../fallback-suggestion.mjs').CommitSuggestion>} 提交建议。
+ * @return {Promise<import('./openai-compatible.mjs').GenerationResult>} 提交建议与生成模式。
  */
 export async function generateSuggestion(prompt) {
   const provider = getProviderName();

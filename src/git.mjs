@@ -20,10 +20,19 @@ const IGNORED_FILE_PATTERNS = [
   /\.snap$/
 ];
 
+/** @type {Record<string, string>} */
+const ENTITY_DISPLAY_NAME_MAP = {
+  foooooot: '六只脚'
+};
+
 /**
  * @typedef {Object} ChangedFile
  * @property {string} status 文件状态。
  * @property {string} path 文件路径。
+ * @property {string} [oldPath] 重命名前的文件路径。
+ * @property {number} [added] 新增行数。
+ * @property {number} [removed] 删除行数。
+ * @property {number} [total] 变更总行数。
  */
 
 /**
@@ -47,6 +56,9 @@ const IGNORED_FILE_PATTERNS = [
  * @property {string} nameStatus 文件状态摘要。
  * @property {string} patch 补丁内容。
  * @property {string} fileSummary 文件级摘要。
+ * @property {string} filesOverview 文件结构概览。
+ * @property {string} groupSummary 分组摘要。
+ * @property {string} semanticHints 语义提示。
  * @property {string} contextSummary 上下文摘要。
  * @property {SummaryStats} stats 统计信息。
  */
@@ -192,17 +204,68 @@ async function buildUntrackedPseudoPatch(files, maxFiles = 5) {
 function parseChangedFiles(nameStatus) {
   return nameStatus
     .split('\n')
-    .map((line) => line.trim())
+    .map((line) => line.trimEnd())
     .filter(Boolean)
     .map((line) => {
-      const [status, ...rest] = line.split(/\s+/);
-      const filePath = rest.join(' ').split('->').at(-1)?.trim() || '';
+      const parts = line.split('\t');
+      const status = parts[0]?.trim() || '';
+      /** @type {string} */
+      let filePath = '';
+      /** @type {string | undefined} */
+      let oldPath;
+
+      if (/^[RC]/.test(status) && parts.length >= 3) {
+        oldPath = parts[1]?.trim() || undefined;
+        filePath = parts[2]?.trim() || '';
+      } else {
+        filePath = parts.slice(1).join('\t').trim();
+      }
+
       return {
         status,
-        path: filePath
+        path: filePath,
+        oldPath
       };
     })
     .filter((item) => item.path);
+}
+
+/**
+ * @description 统计每个补丁文件的增删行数。
+ * @param {FilePatch[]} patches 分文件补丁。
+ * @return {Map<string, {added: number; removed: number; total: number}>} 行数统计映射。
+ */
+function buildPatchLineStats(patches) {
+  /** @type {Map<string, {added: number; removed: number; total: number}>} */
+  const stats = new Map();
+
+  patches.forEach((item) => {
+    let added = 0;
+    let removed = 0;
+
+    item.content.split('\n').forEach((line) => {
+      if (!line || /^(\+\+\+|---|@@|diff --git|index |similarity index |rename from |rename to )/.test(line)) {
+        return;
+      }
+
+      if (line.startsWith('+')) {
+        added += 1;
+        return;
+      }
+
+      if (line.startsWith('-')) {
+        removed += 1;
+      }
+    });
+
+    stats.set(item.path, {
+      added,
+      removed,
+      total: added + removed
+    });
+  });
+
+  return stats;
 }
 
 /**
@@ -220,7 +283,66 @@ function isIgnoredFile(filePath) {
  * @return {boolean} 是否为高上下文文件。
  */
 function isHighContextFile(filePath) {
-  return /(store|state|api|service|types|routes|router|schema|config|hook|hooks|provider)/i.test(filePath);
+  return /(store|state|api|service|types|routes|router|schema|config|hook|hooks|provider|prompt|package\.json)/i.test(filePath);
+}
+
+/**
+ * @description 获取文件分组键，用于保留多类变更的代表样本。
+ * @param {string} filePath 文件路径。
+ * @return {string} 分组键。
+ */
+function getGroupKey(filePath) {
+  if (filePath === 'package.json') {
+    return 'package.json';
+  }
+
+  const parts = filePath.split('/');
+  if (parts.length <= 2) {
+    return parts.join('/');
+  }
+
+  if (parts[0] === 'src' && parts[1] === 'crawler' && parts[2]) {
+    return parts.slice(0, 3).join('/');
+  }
+
+  if (parts[0] === 'src' && parts[1]) {
+    return parts.slice(0, 2).join('/');
+  }
+
+  if (parts[0] === 'lbl-resource' && parts[1] && parts[2]) {
+    return parts.slice(0, 3).join('/');
+  }
+
+  return parts.slice(0, 2).join('/');
+}
+
+/**
+ * @description 判断文件语义角色。
+ * @param {string} filePath 文件路径。
+ * @return {'script'|'request'|'doc'|'config'|'type'|'other'} 角色名称。
+ */
+function getFileRole(filePath) {
+  if (filePath === 'package.json') {
+    return 'config';
+  }
+
+  if (/\/curl\//.test(filePath)) {
+    return 'request';
+  }
+
+  if (/\/prompt\//.test(filePath) || /\.(md|mdx)$/i.test(filePath)) {
+    return 'doc';
+  }
+
+  if (/\/types\//.test(filePath) || /types?\.(ts|js)$/i.test(filePath)) {
+    return 'type';
+  }
+
+  if (/\.(ts|js|tsx|jsx|mjs|cjs|mts|cts)$/i.test(filePath)) {
+    return 'script';
+  }
+
+  return 'other';
 }
 
 /**
@@ -248,6 +370,93 @@ function splitPatchByFile(patch) {
 }
 
 /**
+ * @description 将纯重命名补丁压缩为单行说明，避免浪费 token。
+ * @param {FilePatch[]} patches 分文件补丁。
+ * @return {FilePatch[]} 优化后的补丁列表。
+ */
+function optimizeRenameOnlyPatches(patches) {
+  return patches.map((item) => {
+    if (!/rename from |rename to /m.test(item.content)) {
+      return item;
+    }
+
+    const lines = item.content.split('\n');
+    const hasContentChanges = lines.some((line) => {
+      if (!line || /^(\+\+\+|---|@@|diff --git|index |similarity index |rename from |rename to )/.test(line)) {
+        return false;
+      }
+
+      return line.startsWith('+') || line.startsWith('-');
+    });
+
+    if (hasContentChanges) {
+      return item;
+    }
+
+    const oldPath = item.content.match(/^rename from (.+)$/m)?.[1]?.trim() || item.path;
+    const newPath = item.content.match(/^rename to (.+)$/m)?.[1]?.trim() || item.path;
+
+    return {
+      ...item,
+      content: [`diff --git a/${oldPath} b/${newPath}`, `rename only: ${oldPath} -> ${newPath}`].join('\n')
+    };
+  });
+}
+
+/**
+ * @description 按语义分组选择代表性补丁，避免压缩后只保留前几个文件。
+ * @param {FilePatch[]} patches 分文件补丁。
+ * @param {number} maxFiles 最大保留文件数。
+ * @return {FilePatch[]} 代表性补丁列表。
+ */
+function pickRepresentativePatches(patches, maxFiles) {
+  if (patches.length <= maxFiles) {
+    return patches;
+  }
+
+  /** @type {Map<string, FilePatch[]>} */
+  const grouped = new Map();
+  patches.forEach((patchItem) => {
+    const key = `${getGroupKey(patchItem.path)}::${getFileRole(patchItem.path)}`;
+    const current = grouped.get(key) || [];
+    current.push(patchItem);
+    grouped.set(key, current);
+  });
+
+  const prioritizedKeys = Array.from(grouped.keys()).sort((left, right) => {
+    const leftRole = left.split('::')[1] || 'other';
+    const rightRole = right.split('::')[1] || 'other';
+    const order = {config: 0, script: 1, request: 2, doc: 3, type: 4, other: 5};
+    return (order[leftRole] ?? 9) - (order[rightRole] ?? 9);
+  });
+
+  /** @type {FilePatch[]} */
+  const selected = [];
+  while (selected.length < maxFiles) {
+    let appended = false;
+
+    for (const key of prioritizedKeys) {
+      const bucket = grouped.get(key);
+      if (!bucket || bucket.length === 0) {
+        continue;
+      }
+
+      selected.push(bucket.shift());
+      appended = true;
+      if (selected.length >= maxFiles) {
+        break;
+      }
+    }
+
+    if (!appended) {
+      break;
+    }
+  }
+
+  return selected.filter(Boolean);
+}
+
+/**
  * @description 按文件级别压缩补丁体积。
  * @param {FilePatch[]} patches 分文件补丁。
  * @param {number} perFileChars 单文件最大字符数。
@@ -255,8 +464,7 @@ function splitPatchByFile(patch) {
  * @return {string} 压缩后的补丁文本。
  */
 function compressPatchSections(patches, perFileChars = 1800, maxFiles = 8) {
-  return patches
-    .slice(0, maxFiles)
+  return pickRepresentativePatches(patches, maxFiles)
     .map((item) => {
       if (item.content.length <= perFileChars) {
         return item.content;
@@ -267,6 +475,91 @@ function compressPatchSections(patches, perFileChars = 1800, maxFiles = 8) {
       return `${head}\n\n...FILE_PATCH_TRUNCATED...\n\n${tail}`;
     })
     .join('\n\n');
+}
+
+/**
+ * @description 构建分组摘要，帮助模型先理解多类变更的结构。
+ * @param {ChangedFile[]} files 文件列表。
+ * @return {string} 分组摘要文本。
+ */
+function buildGroupSummary(files) {
+  /** @type {Map<string, {count: number; roles: Set<string>}>} */
+  const groups = new Map();
+
+  files.forEach((item) => {
+    const key = getGroupKey(item.path);
+    const current = groups.get(key) || {count: 0, roles: new Set()};
+    current.count += 1;
+    current.roles.add(getFileRole(item.path));
+    groups.set(key, current);
+  });
+
+  return Array.from(groups.entries())
+    .map(([group, meta]) => `${group}\tcount=${meta.count}\troles=${Array.from(meta.roles).join(',')}`)
+    .join('\n');
+}
+
+/**
+ * @description 从文件路径中推断实体标识。
+ * @param {ChangedFile[]} files 文件列表。
+ * @return {string} 实体标识。
+ */
+function inferEntityName(files) {
+  const crawlerEntity = files
+    .map((item) => item.path.match(/^src\/crawler\/([^/]+)\//)?.[1])
+    .find(Boolean);
+
+  if (crawlerEntity) {
+    return crawlerEntity;
+  }
+
+  const resourceEntity = files
+    .map((item) => item.path.match(/^lbl-resource\/([^/]+)\//)?.[1])
+    .find(Boolean);
+
+  return resourceEntity || '';
+}
+
+/**
+ * @description 将路径实体名转换为更适合展示的名称。
+ * @param {string} entity 实体标识。
+ * @return {string} 展示名称。
+ */
+function getEntityDisplayName(entity) {
+  return ENTITY_DISPLAY_NAME_MAP[entity] || entity;
+}
+
+/**
+ * @description 构建语义提示，降低模型只盯实现细节的概率。
+ * @param {ChangedFile[]} files 文件列表。
+ * @return {string} 语义提示文本。
+ */
+function buildSemanticHints(files) {
+  /** @type {string[]} */
+  const hints = [];
+  const entity = getEntityDisplayName(inferEntityName(files));
+  const crawlerScripts = files.filter((item) => item.path.startsWith('src/crawler/') && getFileRole(item.path) === 'script');
+  const requestFiles = files.filter((item) => getFileRole(item.path) === 'request');
+  const promptDocs = files.filter((item) => getFileRole(item.path) === 'doc');
+  const hasPackageJson = files.some((item) => item.path === 'package.json');
+
+  if (crawlerScripts.length > 0) {
+    hints.push(`新增${entity || '目标站点'}相关爬虫脚本`);
+  }
+
+  if (requestFiles.length > 0) {
+    hints.push(`补充${entity || '目标站点'}请求文件或抓包样例`);
+  }
+
+  if (promptDocs.length > 0) {
+    hints.push(`补充${entity || '目标站点'}技术方案或实现文档`);
+  }
+
+  if (hasPackageJson && crawlerScripts.length > 0) {
+    hints.push(`新增对应爬虫启动命令`);
+  }
+
+  return hints.join('\n');
 }
 
 /**
@@ -281,6 +574,29 @@ function buildFileSummary(files, limit = 12) {
     .map((item) => {
       const kind = isHighContextFile(item.path) ? 'high-context' : 'normal';
       return `${item.status}\t${item.path}\t${kind}`;
+    })
+    .join('\n');
+}
+
+/**
+ * @description 构建更适合模型快速理解的文件结构概览。
+ * @param {ChangedFile[]} files 文件列表。
+ * @param {number} limit 最大条目数。
+ * @return {string} 文件结构概览文本。
+ */
+function buildFilesOverview(files, limit = 12) {
+  return files
+    .slice(0, limit)
+    .map((item) => {
+      const status = item.status.charAt(0) || 'M';
+      const role = getFileRole(item.path);
+      const lineInfo = typeof item.total === 'number' ? ` +${item.added || 0}/-${item.removed || 0}` : '';
+
+      if (status === 'R' && item.oldPath) {
+        return `${status}\t${item.oldPath} -> ${item.path}\t${role}${lineInfo}`;
+      }
+
+      return `${status}\t${item.path}\t${role}${lineInfo}`;
     })
     .join('\n');
 }
@@ -377,24 +693,36 @@ async function buildAdaptiveSummary(source, nameStatus, patch) {
   const allFiles = parseChangedFiles(nameStatus);
   const filteredFiles = allFiles.filter((item) => !isIgnoredFile(item.path));
   const patchSections = splitPatchByFile(patch);
-  const filteredPatches = patchSections.filter((item) => !isIgnoredFile(item.path));
+  const optimizedPatchSections = optimizeRenameOnlyPatches(patchSections);
+  const filteredPatches = optimizedPatchSections.filter((item) => !isIgnoredFile(item.path));
+  const lineStats = buildPatchLineStats(filteredPatches.length > 0 ? filteredPatches : optimizedPatchSections);
   const files = filteredFiles.length > 0 ? filteredFiles : allFiles;
   const patches = filteredPatches.length > 0 ? filteredPatches : patchSections;
+  const filesWithStats = files.map((item) => {
+    const currentStats = lineStats.get(item.path) || {added: 0, removed: 0, total: 0};
+    return {
+      ...item,
+      ...currentStats
+    };
+  });
   const highContextCount = files.filter((item) => isHighContextFile(item.path)).length;
   const strategy = decideStrategy(files, patch, highContextCount);
   const optimizedPatch = buildStrategyPatch(patches, strategy);
-  const contextSummary = strategy === 'incremental' ? '' : await buildContextSummary(files, strategy === 'compressed' ? 2 : 3);
+  const contextSummary = strategy === 'incremental' ? '' : await buildContextSummary(filesWithStats, strategy === 'compressed' ? 2 : 3);
 
   return {
     source,
     strategy,
-    nameStatus: files.map((item) => `${item.status}\t${item.path}`).join('\n'),
+    nameStatus: filesWithStats.map((item) => `${item.status}\t${item.path}`).join('\n'),
     patch: optimizedPatch,
-    fileSummary: buildFileSummary(files),
+    fileSummary: buildFileSummary(filesWithStats),
+    filesOverview: buildFilesOverview(filesWithStats),
+    groupSummary: buildGroupSummary(filesWithStats),
+    semanticHints: buildSemanticHints(filesWithStats),
     contextSummary,
     stats: {
-      fileCount: files.length,
-      ignoredFileCount: allFiles.length - files.length,
+      fileCount: filesWithStats.length,
+      ignoredFileCount: allFiles.length - filesWithStats.length,
       highContextFileCount: highContextCount,
       patchChars: optimizedPatch.length
     }

@@ -1,3 +1,4 @@
 node_modules
 .env
+.gai-debug
 .DS_Store
