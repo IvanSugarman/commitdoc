@@ -9,7 +9,7 @@ import {promisify} from 'node:util';
 import readline from 'node:readline/promises';
 import React, {useCallback, useEffect, useMemo, useState} from 'react';
 import {Box, Text, render, useApp, useInput} from 'ink';
-import {applyCommitAndPush, clipPatch, getChangesForSummary, isGitRepo} from './git.mjs';
+import {applyCommitAndPush, getChangesForSummary, isGitRepo} from './git.mjs';
 import {generateSuggestion} from './openai.mjs';
 import {buildPrompt} from './prompt.mjs';
 
@@ -67,6 +67,22 @@ const DEFAULT_ENV = {
  * @property {string} name 检查项名称。
  * @property {'pass'|'warn'|'fail'} status 检查结果。
  * @property {string} detail 详细说明。
+ */
+
+/**
+ * @typedef {Object} TokenDoctorResult
+ * @property {'staged'|'working-tree'} source 变更来源。
+ * @property {'incremental'|'contextual'|'compressed'} strategy 摘要策略。
+ * @property {number} fileCount 文件数。
+ * @property {number} ignoredFileCount 被忽略文件数。
+ * @property {number} highContextFileCount 高上下文文件数。
+ * @property {number} nameStatusChars 文件状态字符数。
+ * @property {number} fileSummaryChars 文件摘要字符数。
+ * @property {number} contextSummaryChars 上下文字符数。
+ * @property {number} patchChars 补丁字符数。
+ * @property {number} promptChars Prompt 字符数。
+ * @property {number} estimatedInputTokens 估算输入 token 数。
+ * @property {string[]} notes 说明列表。
  */
 
 /**
@@ -325,6 +341,97 @@ async function printDoctor() {
 }
 
 /**
+ * @description 估算 token 用量，按中英混合场景做保守估计。
+ * @param {number} chars 字符数。
+ * @return {number} 估算 token 数。
+ */
+function estimateTokens(chars) {
+  return Math.ceil(chars / 3.2);
+}
+
+/**
+ * @description 构建 token 诊断结果。
+ * @return {Promise<TokenDoctorResult>} token 诊断结果。
+ */
+async function analyzeTokenUsage() {
+  if (!(await isGitRepo())) {
+    throw new Error('Current directory is not a git repository.');
+  }
+
+  const summary = await getChangesForSummary();
+  if (!summary.nameStatus || !summary.patch) {
+    throw new Error('No changes found in staged or working tree.');
+  }
+
+  const prompt = buildPrompt(summary);
+  /** @type {string[]} */
+  const notes = [];
+
+  if (summary.ignoredFileCount > 0) {
+    notes.push(`已忽略 ${summary.ignoredFileCount} 个低价值文件，减少无效 token 消耗`);
+  }
+
+  if (summary.strategy === 'incremental') {
+    notes.push('当前改动较小，直接使用增量 patch');
+  }
+
+  if (summary.strategy === 'contextual') {
+    notes.push('当前改动中等，补充文件摘要与关键上下文以稳定总结质量');
+  }
+
+  if (summary.strategy === 'compressed') {
+    notes.push('当前改动较大，已压缩 patch 并限制上下文范围');
+  }
+
+  if (summary.highContextFileCount > 0) {
+    notes.push(`检测到 ${summary.highContextFileCount} 个高上下文文件，已优先补充关键上下文`);
+  }
+
+  return {
+    source: summary.source,
+    strategy: summary.strategy,
+    fileCount: summary.stats.fileCount,
+    ignoredFileCount: summary.stats.ignoredFileCount,
+    highContextFileCount: summary.stats.highContextFileCount,
+    nameStatusChars: summary.nameStatus.length,
+    fileSummaryChars: summary.fileSummary.length,
+    contextSummaryChars: summary.contextSummary.length,
+    patchChars: summary.patch.length,
+    promptChars: prompt.length,
+    estimatedInputTokens: estimateTokens(prompt.length),
+    notes
+  };
+}
+
+/**
+ * @description 输出 token 诊断信息。
+ * @return {Promise<void>} 输出完成。
+ */
+async function printTokenDoctor() {
+  const result = await analyzeTokenUsage();
+  process.stdout.write('gai doctor --token\n\n');
+  process.stdout.write(`来源: ${result.source === 'staged' ? '暂存区改动' : '工作区改动'}\n`);
+  process.stdout.write(`策略: ${result.strategy === 'incremental' ? '增量' : result.strategy === 'contextual' ? '增量 + 上下文' : '压缩摘要'}\n`);
+  process.stdout.write(`文件数: ${result.fileCount}\n`);
+  process.stdout.write(`忽略文件数: ${result.ignoredFileCount}\n`);
+  process.stdout.write(`高上下文文件数: ${result.highContextFileCount}\n`);
+  process.stdout.write('\n');
+  process.stdout.write(`nameStatus chars: ${result.nameStatusChars}\n`);
+  process.stdout.write(`fileSummary chars: ${result.fileSummaryChars}\n`);
+  process.stdout.write(`contextSummary chars: ${result.contextSummaryChars}\n`);
+  process.stdout.write(`patch chars: ${result.patchChars}\n`);
+  process.stdout.write(`prompt chars: ${result.promptChars}\n`);
+  process.stdout.write(`estimated input tokens: ${result.estimatedInputTokens}\n`);
+
+  if (result.notes.length > 0) {
+    process.stdout.write('\n');
+    result.notes.forEach((note) => {
+      process.stdout.write(`- ${note}\n`);
+    });
+  }
+}
+
+/**
  * @description 交互式写入 env 配置。
  * @return {Promise<void>} 配置流程完成。
  */
@@ -372,6 +479,7 @@ function printHelp() {
     '  gai            生成 Commit 建议并交互执行 git add / commit / push',
     '  gai install    写入 ~/.zshrc 并校验 gai 命令可用',
     '  gai doctor     检查 Node、Git、.env、API Key、zsh 安装状态',
+    '  gai doctor --token 估算当前改动的 prompt 体积与 token 使用',
     '  gai config     交互式写入 .env 配置',
     '  gai --help     查看帮助'
   ].join('\n'));
@@ -462,6 +570,8 @@ function App() {
   const [completed, setCompleted] = useState(false);
   /** @type {['staged'|'working-tree'|null, (value: 'staged'|'working-tree'|null) => void]} */
   const [summarySource, setSummarySource] = useState(null);
+  /** @type {['incremental'|'contextual'|'compressed'|null, (value: 'incremental'|'contextual'|'compressed'|null) => void]} */
+  const [summaryStrategy, setSummaryStrategy] = useState(null);
   /** @type {[StepState[], (value: StepState[] | ((value: StepState[]) => StepState[])) => void]} */
   const [steps, setSteps] = useState(createInitialSteps);
 
@@ -477,15 +587,13 @@ function App() {
         throw new Error('Current directory is not a git repository.');
       }
 
-      const {nameStatus, patch, source} = await getChangesForSummary();
+      const summaryInput = await getChangesForSummary();
+      const {nameStatus, patch, source, strategy} = summaryInput;
       if (!nameStatus || !patch) {
         throw new Error('No changes found in staged or working tree.');
       }
 
-      const prompt = buildPrompt({
-        nameStatus,
-        patch: clipPatch(patch)
-      });
+      const prompt = buildPrompt(summaryInput);
 
       const generated = await generateSuggestion(prompt);
       setSuggestion({
@@ -493,10 +601,12 @@ function App() {
         bullets: generated.bullets
       });
       setSummarySource(source);
+      setSummaryStrategy(strategy);
       setMenuIndex(0);
     } catch (cause) {
       setSuggestion(null);
       setSummarySource(null);
+      setSummaryStrategy(null);
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setLoading(false);
@@ -608,6 +718,11 @@ function App() {
         {key: 'source', color: 'gray'},
         `来源: ${summarySource === 'staged' ? '暂存区改动' : '工作区改动'}`
       ),
+      h(
+        Text,
+        {key: 'strategy', color: 'gray'},
+        `策略: ${summaryStrategy === 'incremental' ? '增量' : summaryStrategy === 'contextual' ? '增量 + 上下文' : '压缩摘要'}`
+      ),
       h(Text, {key: 'summary-label', color: 'green'}, '变更摘要')
     ];
 
@@ -680,6 +795,11 @@ async function main() {
   }
 
   if (command === 'doctor') {
+    if (process.argv[3] === '--token') {
+      await printTokenDoctor();
+      return;
+    }
+
     await printDoctor();
     return;
   }

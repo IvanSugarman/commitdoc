@@ -46,6 +46,18 @@ This command checks:
 - `~/.zshrc` install status
 - whether `gai` can be resolved in zsh
 
+```bash
+gai doctor --token
+```
+
+This command reports:
+
+- current source: staged or working tree
+- selected strategy: incremental, contextual, or compressed
+- changed file count and ignored file count
+- patch / prompt character size
+- estimated input token usage
+
 ## Config
 
 ```bash
@@ -81,6 +93,10 @@ GAI_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 ## Behavior
 
 - Prioritizes staged changes; if none exist, falls back to working tree changes.
+- Uses adaptive token control:
+  - small changes use incremental patch only
+  - medium changes add file summary and selected context
+  - large changes compress patch sections and ignore low-value noise files first
 - Commit title and summary are generated in Chinese, while commit type keywords remain English, for example: `feat: 切换默认模型为 GLM 4.7`.
 - You can choose:
   - `Confirm`: run add + commit + push.
