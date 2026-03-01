@@ -17,6 +17,49 @@ cp .env.example .env
 gai
 ```
 
+## Shell Install
+
+```bash
+gai install
+```
+
+This command will:
+
+- append a `gai` shell function to `~/.zshrc`
+- verify the command in a fresh zsh subprocess
+- print a reminder to run `source ~/.zshrc` if your current shell has not reloaded yet
+
+## Doctor
+
+```bash
+gai doctor
+```
+
+This command checks:
+
+- Node.js version
+- Git availability
+- current Git repository status
+- `.env` existence
+- `GAI_API_KEY` availability
+- model and base URL config
+- `~/.zshrc` install status
+- whether `gai` can be resolved in zsh
+
+## Config
+
+```bash
+gai config
+```
+
+This command interactively writes:
+
+- `GAI_API_KEY`
+- `GAI_BASE_URL`
+- `GAI_MODEL`
+
+If a value is already configured, pressing enter keeps the current value.
+
 ## Model Config
 
 Default configuration uses Zhipu GLM 4.7 coding endpoint:
@@ -49,3 +92,14 @@ GAI_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 
 - If neither staged nor working tree changes exist, command exits with error.
 - Push requires current branch remote tracking configured.
+
+## Migration
+
+On another machine, the basic setup flow is:
+
+```bash
+npm install
+gai config
+gai install
+gai doctor
+```
