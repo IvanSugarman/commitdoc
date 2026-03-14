@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import dotenv from 'dotenv';
 import {execFile} from 'node:child_process';
 import {access, appendFile, mkdir, readFile, readdir, writeFile} from 'node:fs/promises';
 import os from 'node:os';
@@ -10,9 +9,10 @@ import {promisify} from 'node:util';
 import readline from 'node:readline/promises';
 import React, {useCallback, useEffect, useMemo, useState} from 'react';
 import {Box, Text, render, useApp, useInput} from 'ink';
-import {applyCommitAndPush, getChangesForSummary, isGitRepo} from './git.mjs';
-import {generateSuggestion, getProviderDefaults, getProviderName, getResolvedProviderConfig} from './openai.mjs';
-import {buildPrompt, buildZhipuPrompt} from './prompt.mjs';
+import {ACTIVE_ENV_PATH, ENV_DIR, PROJECT_ROOT} from './env.js';
+import {applyCommitAndPush, getChangesForSummary, isGitRepo} from './git.js';
+import {generateSuggestion, getProviderDefaults, getProviderName, getResolvedProviderConfig} from './openai.js';
+import {buildPrompt, buildZhipuPrompt} from './prompt.js';
 
 /** @type {(file: string, args: string[]) => Promise<{stdout: string; stderr: string}>} */
 const execFileAsync = promisify(execFile);
@@ -25,20 +25,6 @@ const h = React.createElement;
 
 /** @type {string} */
 const CLI_PATH = fileURLToPath(import.meta.url);
-
-/** @type {string} */
-const PROJECT_ROOT = path.dirname(path.dirname(CLI_PATH));
-
-/** @type {string} */
-const ENV_DIR = path.join(PROJECT_ROOT, '.env');
-
-/** @type {string} */
-const ACTIVE_ENV_PATH = path.join(ENV_DIR, 'active.env');
-
-dotenv.config({
-  path: ACTIVE_ENV_PATH,
-  override: true
-});
 
 /** @type {string} */
 const ZSHRC_PATH = path.join(os.homedir(), '.zshrc');
@@ -57,13 +43,16 @@ const INSTALL_BLOCK_END = '# GAI_CLI:END';
 
 /** @type {{ GAI_PROVIDER: string; GAI_API_KEY: string; GAI_BASE_URL: string; GAI_MODEL: string; GAI_FORMAT_MODEL: string; GAI_ENABLE_THINKING: string }} */
 const DEFAULT_ENV = {
-  GAI_PROVIDER: 'zhipu',
+  GAI_PROVIDER: 'ark',
   GAI_API_KEY: '',
-  GAI_BASE_URL: 'https://open.bigmodel.cn/api/coding/paas/v4',
-  GAI_MODEL: 'glm-4.7',
-  GAI_FORMAT_MODEL: 'glm-4.7-flash',
+  GAI_BASE_URL: 'https://ark.cn-beijing.volces.com/api/coding/v3',
+  GAI_MODEL: 'ark-code-latest',
+  GAI_FORMAT_MODEL: 'ark-code-latest',
   GAI_ENABLE_THINKING: 'false'
 };
+
+type EnvConfig = Record<string, string>;
+type GaiEnvConfig = typeof DEFAULT_ENV;
 
 /**
  * @typedef {Object} SuggestionViewModel
@@ -132,7 +121,7 @@ async function runCommand(file, args) {
  * @param {string} content env 文件内容。
  * @return {Record<string, string>} 解析后的键值对。
  */
-function parseEnvContent(content) {
+function parseEnvContent(content: string): EnvConfig {
   /** @type {Record<string, string>} */
   const result = {};
 
@@ -163,7 +152,7 @@ function parseEnvContent(content) {
  * @param {{ GAI_PROVIDER: string; GAI_API_KEY: string; GAI_BASE_URL: string; GAI_MODEL: string; GAI_FORMAT_MODEL: string; GAI_ENABLE_THINKING: string }} next 下一版配置。
  * @return {string} 新的 env 文件内容。
  */
-function buildEnvFileContent(current, next) {
+function buildEnvFileContent(current: EnvConfig, next: GaiEnvConfig): string {
   /** @type {string[]} */
   const preserved = [];
 
@@ -189,7 +178,7 @@ function buildEnvFileContent(current, next) {
  * @param {Record<string, string>} config 配置对象。
  * @return {string} thinking 开关字符串。
  */
-function resolveEnableThinking(config) {
+function resolveEnableThinking(config: EnvConfig): string {
   if (typeof config.GAI_ENABLE_THINKING === 'string' && config.GAI_ENABLE_THINKING.length > 0) {
     return config.GAI_ENABLE_THINKING;
   }
@@ -205,7 +194,7 @@ function resolveEnableThinking(config) {
  * @description 读取当前 env 配置。
  * @return {Promise<Record<string, string>>} 当前 env 键值对。
  */
-async function readEnvConfig() {
+async function readEnvConfig(): Promise<EnvConfig> {
   try {
     const content = await readFile(ACTIVE_ENV_PATH, 'utf8');
     return parseEnvContent(content);
@@ -274,7 +263,7 @@ function getProfilePath(profileName) {
  * @param {string} profileName profile 名称。
  * @return {Promise<Record<string, string>>} profile 配置。
  */
-async function readProfileConfig(profileName) {
+async function readProfileConfig(profileName: string): Promise<EnvConfig> {
   const content = await readFile(getProfilePath(profileName), 'utf8');
   return parseEnvContent(content);
 }
@@ -453,7 +442,7 @@ async function runDoctor() {
   }
 
   const envConfig = await readEnvConfig();
-  const apiKey = envConfig.GAI_API_KEY || process.env.GAI_API_KEY || '';
+  const apiKey = envConfig.GAI_API_KEY || process.env.GAI_API_KEY || process.env.OPENAI_API_KEY || '';
   const providerName = envConfig.GAI_PROVIDER || process.env.GAI_PROVIDER || getProviderName();
   let providerConfig = {
     model: envConfig.GAI_MODEL || process.env.GAI_MODEL || DEFAULT_ENV.GAI_MODEL,
@@ -470,7 +459,11 @@ async function runDoctor() {
     // 保持使用基于 env 的兜底配置，避免 doctor 因缺少 key 中断
   }
 
-  items.push({name: 'GAI_API_KEY', status: apiKey ? 'pass' : 'fail', detail: apiKey ? '已配置' : '缺少 GAI_API_KEY，可执行 gai config 设置'});
+  items.push({
+    name: 'API Key',
+    status: apiKey ? 'pass' : 'fail',
+    detail: apiKey ? '已通过 GAI_API_KEY 或 OPENAI_API_KEY 配置' : '缺少 GAI_API_KEY / OPENAI_API_KEY，可执行 gai config 或在 shell 中导出'
+  });
   items.push({name: 'Provider Config', status: providerName ? 'pass' : 'warn', detail: `provider=${providerName}, model=${providerConfig.model}, formatModel=${providerConfig.formatModel}`});
   items.push({name: 'Provider Endpoint', status: providerConfig.baseURL ? 'pass' : 'warn', detail: `baseURL=${providerConfig.baseURL}, enableThinking=${providerConfig.enableThinking ? 'true' : 'false'}`});
 
@@ -511,11 +504,12 @@ function estimateTokens(chars) {
 
 /**
  * @description 根据当前 provider 选择实际使用的提示词。
- * @param {import('./prompt.mjs').PromptInput} summary 摘要输入。
+ * @param {import('./prompt.js').PromptInput} summary 摘要输入。
  * @return {string} 最终提示词。
  */
 function buildProviderPrompt(summary) {
-  return getProviderName() === 'zhipu' ? buildZhipuPrompt(summary) : buildPrompt(summary);
+  const provider = getProviderName();
+  return provider === 'zhipu' || provider === 'ark' ? buildZhipuPrompt(summary) : buildPrompt(summary);
 }
 
 async function analyzeTokenUsage() {
@@ -531,8 +525,8 @@ async function analyzeTokenUsage() {
   const prompt = buildProviderPrompt(summary);
   const notes = [];
 
-  if (summary.ignoredFileCount > 0) {
-    notes.push(`已忽略 ${summary.ignoredFileCount} 个低价值文件，减少无效 token 消耗`);
+  if (summary.stats.ignoredFileCount > 0) {
+    notes.push(`已忽略 ${summary.stats.ignoredFileCount} 个低价值文件，减少无效 token 消耗`);
   }
   if (summary.strategy === 'incremental') {
     notes.push('当前改动较小，直接使用增量 patch');
@@ -543,8 +537,8 @@ async function analyzeTokenUsage() {
   if (summary.strategy === 'compressed') {
     notes.push('当前改动较大，已压缩 patch 并限制上下文范围');
   }
-  if (summary.highContextFileCount > 0) {
-    notes.push(`检测到 ${summary.highContextFileCount} 个高上下文文件，已优先补充关键上下文`);
+  if (summary.stats.highContextFileCount > 0) {
+    notes.push(`检测到 ${summary.stats.highContextFileCount} 个高上下文文件，已优先补充关键上下文`);
   }
 
   return {
@@ -574,7 +568,7 @@ function getStrategyLabel(strategy) {
 }
 
 function getProviderLabel() {
-  const provider = process.env.GAI_PROVIDER || 'zhipu';
+  const provider = process.env.GAI_PROVIDER || DEFAULT_ENV.GAI_PROVIDER;
   const model = process.env.GAI_MODEL || DEFAULT_ENV.GAI_MODEL;
   return `${provider} / ${model}`;
 }

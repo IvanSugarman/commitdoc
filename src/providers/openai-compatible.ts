@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
-import {buildFallbackSuggestion, parseSuggestion} from '../fallback-suggestion.mjs';
-import {serializeModelResponse, writeModelLog} from '../model-log.mjs';
+import {buildFallbackSuggestion, parseSuggestion} from '../fallback-suggestion.js';
+import {serializeModelResponse, writeModelLog} from '../model-log.js';
 
 /**
  * @typedef {Object} ProviderConfig
@@ -25,7 +25,7 @@ import {serializeModelResponse, writeModelLog} from '../model-log.mjs';
 
 /**
  * @typedef {Object} GenerationResult
- * @property {import('../fallback-suggestion.mjs').CommitSuggestion} suggestion 提交建议。
+ * @property {import('../fallback-suggestion.js').CommitSuggestion} suggestion 提交建议。
  * @property {GenerationMode} mode 生成模式。
  */
 

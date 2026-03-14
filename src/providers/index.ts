@@ -1,9 +1,10 @@
-import {createOpenAICompatibleConfig, generateWithOpenAICompatible} from './openai-compatible.mjs';
-import {getOpenAIConfig, generateSuggestion as generateOpenAISuggestion} from './openai.mjs';
-import {getZhipuConfig, generateSuggestion as generateZhipuSuggestion} from './zhipu.mjs';
+import {getArkConfig, generateSuggestion as generateArkSuggestion} from './ark.js';
+import {createOpenAICompatibleConfig, generateWithOpenAICompatible} from './openai-compatible.js';
+import {getOpenAIConfig, generateSuggestion as generateOpenAISuggestion} from './openai.js';
+import {getZhipuConfig, generateSuggestion as generateZhipuSuggestion} from './zhipu.js';
 
 /**
- * @typedef {'zhipu'|'openai'|'openai-compatible'} ProviderName
+ * @typedef {'ark'|'zhipu'|'openai'|'openai-compatible'} ProviderName
  */
 
 /**
@@ -21,8 +22,8 @@ import {getZhipuConfig, generateSuggestion as generateZhipuSuggestion} from './z
  * @return {ProviderName} Provider 名称。
  */
 export function getProviderName() {
-  const provider = (process.env.GAI_PROVIDER || 'zhipu').trim().toLowerCase();
-  if (provider === 'openai' || provider === 'openai-compatible') {
+  const provider = (process.env.GAI_PROVIDER || 'ark').trim().toLowerCase();
+  if (provider === 'ark' || provider === 'openai' || provider === 'openai-compatible') {
     return provider;
   }
 
@@ -36,6 +37,17 @@ export function getProviderName() {
  */
 export function getProviderDefaults(providerName) {
   const provider = providerName.trim().toLowerCase();
+
+  if (provider === 'ark') {
+    return {
+      provider: 'ark',
+      baseURL: 'https://ark.cn-beijing.volces.com/api/coding/v3',
+      model: 'ark-code-latest',
+      formatModel: 'ark-code-latest',
+      enableThinking: false,
+      enableFormatFallback: false
+    };
+  }
 
   if (provider === 'openai') {
     return {
@@ -71,10 +83,14 @@ export function getProviderDefaults(providerName) {
 
 /**
  * @description 获取当前 Provider 的解析配置。
- * @return {import('./openai-compatible.mjs').ProviderConfig} Provider 配置。
+ * @return {import('./openai-compatible.js').ProviderConfig} Provider 配置。
  */
 export function getResolvedProviderConfig() {
   const provider = getProviderName();
+
+  if (provider === 'ark') {
+    return getArkConfig();
+  }
 
   if (provider === 'openai') {
     return getOpenAIConfig();
@@ -92,10 +108,14 @@ export function getResolvedProviderConfig() {
 /**
  * @description 根据当前 Provider 生成提交建议。
  * @param {string} prompt 输入提示词。
- * @return {Promise<import('./openai-compatible.mjs').GenerationResult>} 提交建议与生成模式。
+ * @return {Promise<import('./openai-compatible.js').GenerationResult>} 提交建议与生成模式。
  */
 export async function generateSuggestion(prompt) {
   const provider = getProviderName();
+
+  if (provider === 'ark') {
+    return generateArkSuggestion(prompt);
+  }
 
   if (provider === 'openai') {
     return generateOpenAISuggestion(prompt);

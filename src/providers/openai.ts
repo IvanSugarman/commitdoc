@@ -1,8 +1,8 @@
-import {createOpenAICompatibleConfig, generateWithOpenAICompatible} from './openai-compatible.mjs';
+import {createOpenAICompatibleConfig, generateWithOpenAICompatible} from './openai-compatible.js';
 
 /**
  * @description 构建 OpenAI Provider 配置。
- * @return {import('./openai-compatible.mjs').ProviderConfig} Provider 配置。
+ * @return {import('./openai-compatible.js').ProviderConfig} Provider 配置。
  */
 export function getOpenAIConfig() {
   return createOpenAICompatibleConfig({
@@ -19,7 +19,7 @@ export function getOpenAIConfig() {
 /**
  * @description 使用 OpenAI 模型生成提交建议。
  * @param {string} prompt 输入提示词。
- * @return {Promise<import('./openai-compatible.mjs').GenerationResult>} 提交建议与生成模式。
+ * @return {Promise<import('./openai-compatible.js').GenerationResult>} 提交建议与生成模式。
  */
 export async function generateSuggestion(prompt) {
   return generateWithOpenAICompatible(getOpenAIConfig(), prompt);

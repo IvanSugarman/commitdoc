@@ -1,6 +1,8 @@
+import './env.js';
+
 export {
   generateSuggestion,
   getProviderDefaults,
   getProviderName,
   getResolvedProviderConfig,
-} from "./providers/index.mjs";
+} from "./providers/index.js";

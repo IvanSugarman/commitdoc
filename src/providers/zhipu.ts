@@ -1,11 +1,11 @@
 import OpenAI from 'openai';
-import {buildFallbackSuggestion, buildSuggestionFromReasoning, parseSuggestion} from '../fallback-suggestion.mjs';
-import {serializeModelResponse, writeModelLog} from '../model-log.mjs';
-import {createOpenAICompatibleConfig} from './openai-compatible.mjs';
+import {buildFallbackSuggestion, buildSuggestionFromReasoning, parseSuggestion} from '../fallback-suggestion.js';
+import {serializeModelResponse, writeModelLog} from '../model-log.js';
+import {createOpenAICompatibleConfig} from './openai-compatible.js';
 
 /**
  * @description 构建智谱 Provider 配置。
- * @return {import('./openai-compatible.mjs').ProviderConfig} Provider 配置。
+ * @return {import('./openai-compatible.js').ProviderConfig} Provider 配置。
  */
 export function getZhipuConfig() {
   return createOpenAICompatibleConfig({
@@ -22,7 +22,7 @@ export function getZhipuConfig() {
 /**
  * @description 使用智谱模型生成提交建议。
  * @param {string} prompt 输入提示词。
- * @return {Promise<import('./openai-compatible.mjs').GenerationResult>} 提交建议与生成模式。
+ * @return {Promise<import('./openai-compatible.js').GenerationResult>} 提交建议与生成模式。
  */
 export async function generateSuggestion(prompt) {
   const config = getZhipuConfig();
@@ -30,7 +30,7 @@ export async function generateSuggestion(prompt) {
     apiKey: config.apiKey,
     baseURL: config.baseURL
   });
-  const requestBody = {
+  const requestBody: any = {
     model: config.model,
     temperature: 0.1,
     max_tokens: 10000,
@@ -76,7 +76,7 @@ export async function generateSuggestion(prompt) {
       response: serializeModelResponse(response)
     });
 
-    const message = response.choices?.[0]?.message || {};
+    const message: any = response.choices?.[0]?.message || {};
     const content = typeof message.content === 'string' ? message.content.trim() : '';
     const reasoning = typeof message.reasoning_content === 'string' ? message.reasoning_content.trim() : '';
 

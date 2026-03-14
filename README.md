@@ -27,6 +27,7 @@ The project now uses multi-file env profiles:
 
 Built-in profiles:
 
+- `ark-coding-plan`
 - `zhipu-glm-4.7`
 - `openai-gpt-4.1-mini`
 - `openai-compatible-default`
@@ -34,7 +35,7 @@ Built-in profiles:
 Switch profile with one command:
 
 ```bash
-gai use zhipu-glm-4.7
+gai use ark-coding-plan
 gai use openai-gpt-4.1-mini
 ```
 
@@ -62,7 +63,7 @@ This command checks:
 - Git availability
 - current Git repository status
 - `.env/active.env` existence
-- `GAI_API_KEY` availability
+- `GAI_API_KEY` / `OPENAI_API_KEY` availability
 - model and base URL config
 - `~/.zshrc` install status
 - whether `gai` can be resolved in zsh
@@ -92,30 +93,33 @@ This command interactively writes:
 - `GAI_BASE_URL`
 - `GAI_MODEL`
 - `GAI_FORMAT_MODEL`
-- `GAI_DISABLE_THINKING`
+- `GAI_ENABLE_THINKING`
 
 If a value is already configured, pressing enter keeps the current value.
 The command edits the current active profile file under `.env/profiles/` and then syncs `.env/active.env`.
-When you switch `GAI_PROVIDER`, the default `GAI_BASE_URL`, `GAI_MODEL`, `GAI_FORMAT_MODEL`, and `GAI_DISABLE_THINKING` values will automatically switch to that provider's defaults.
+When you switch `GAI_PROVIDER`, the default `GAI_BASE_URL`, `GAI_MODEL`, `GAI_FORMAT_MODEL`, and `GAI_ENABLE_THINKING` values will automatically switch to that provider's defaults.
 
 ## Model Config
 
-Default configuration uses Zhipu GLM 4.7 coding endpoint:
+Default configuration uses Volcengine Ark Coding Plan:
 
 ```env
-GAI_PROVIDER=zhipu
-GAI_API_KEY=your_zhipu_api_key_here
-GAI_BASE_URL=https://open.bigmodel.cn/api/coding/paas/v4
-GAI_MODEL=glm-4.7
-GAI_FORMAT_MODEL=glm-4.7-flash
-GAI_DISABLE_THINKING=true
+GAI_PROVIDER=ark
+GAI_API_KEY=
+GAI_BASE_URL=https://ark.cn-beijing.volces.com/api/coding/v3
+GAI_MODEL=ark-code-latest
+GAI_FORMAT_MODEL=ark-code-latest
+GAI_ENABLE_THINKING=false
 ```
 
 The CLI now uses a provider adapter architecture. Current built-in providers:
 
-- `zhipu` (default)
+- `ark` (default)
+- `zhipu`
 - `openai`
 - `openai-compatible`
+
+The runtime reads `GAI_API_KEY` first and falls back to `OPENAI_API_KEY`.
 
 You can switch providers by changing `GAI_PROVIDER`, `GAI_BASE_URL`, `GAI_MODEL`, and `GAI_API_KEY`.
 
@@ -127,7 +131,7 @@ GAI_API_KEY=your_openai_api_key_here
 GAI_BASE_URL=https://api.openai.com/v1
 GAI_MODEL=gpt-4.1-mini
 GAI_FORMAT_MODEL=gpt-4.1-mini
-GAI_DISABLE_THINKING=true
+GAI_ENABLE_THINKING=false
 ```
 
 If your Zhipu account does not support the coding endpoint for this custom CLI, switch `GAI_BASE_URL` to:
