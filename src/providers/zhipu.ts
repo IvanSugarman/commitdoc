@@ -1,8 +1,8 @@
 import OpenAI from 'openai';
-import type {BriefType} from '../commands.js';
-import {buildBriefFromReasoning, buildFallbackBrief, parseGeneratedBrief} from '../fallback-suggestion.js';
-import {hashParts, readJsonCache, serializeModelResponse, writeJsonCache, writeModelLog, writePipelineLog} from '../model-log.js';
-import {BASE_SYSTEM_PROMPT} from '../prompt.js';
+import type {BriefType} from '../app/commands.js';
+import {buildBriefFromReasoning, buildFallbackBrief, parseGeneratedBrief} from '../infrastructure/fallback-suggestion.js';
+import {hashParts, readJsonCache, serializeModelResponse, writeJsonCache, writeModelLog, writePipelineLog} from '../infrastructure/model-log.js';
+import {BASE_SYSTEM_PROMPT} from '../domain/prompt.js';
 import {createOpenAICompatibleConfig, normalizeTokenUsage} from './openai-compatible.js';
 
 /**

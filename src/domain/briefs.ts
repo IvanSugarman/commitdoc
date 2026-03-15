@@ -1,4 +1,4 @@
-import {allowsGitExecution, getBriefOption, type BriefType} from './commands.js';
+import {allowsGitExecution, getBriefOption, type BriefType} from '../app/commands.js';
 
 /** 变更来源 */
 type ChangeSource = 'staged' | 'working-tree' | 'mixed-workspace';

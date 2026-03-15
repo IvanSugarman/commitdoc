@@ -1,7 +1,7 @@
-# Task Plan: Assess docs alignment and refactor plan
+# Task Plan: Generalize CR Summarization
 
 ## Goal
-基于 `docs/plan.md` 对比当前项目实现，评估功能完成度、实现优劣与结构问题，并输出以重构为目标的分阶段改动方案。
+在已完成目录分层重构的基础上，把 `gai` 的 CR 总结链路收敛为“Evidence-first IR -> Generic prompt -> Minimal fallback”，减少 fallback 和仓库特异处理，提升对目录迁移 / 架构重组场景的总结准确度。
 
 ## Current Phase
 Phase 5
@@ -13,50 +13,49 @@ Phase 5
 - [x] Document findings in findings.md
 - **Status:** complete
 
-### Phase 2: Implementation Assessment
-- [x] Read technical documentation and map target architecture
-- [x] Inspect current code paths and module boundaries
-- [x] Evaluate completion, strengths, and weaknesses
+### Phase 2: Planning & Structure
+- [x] Define technical approach
+- [x] Create target directory structure
+- [x] Document decisions with rationale
 - **Status:** complete
 
-### Phase 3: Refactor Planning
-- [x] Identify highest-leverage refactor themes
-- [x] Propose phased change plan with scope and risks
-- [x] Define validation strategy
+### Phase 3: Implementation
+- [x] Reorganize files and imports step by step
+- [x] Preserve CLI behavior and public commands
+- [x] Keep changes reviewable and incremental
 - **Status:** complete
 
-### Phase 4: Review & Delivery
-- [x] Review conclusions against source files
-- [x] Ensure plan is actionable and prioritized
-- [x] Deliver assessment and refactor plan to user
+### Phase 4: Testing & Verification
+- [x] Verify build and typecheck path
+- [x] Document verification status in progress.md
+- [x] Fix any issues found
 - **Status:** complete
 
-### Phase 5: Engineering Close-Out
-- [x] Add regression tests for core modules
-- [x] Add repeatable verification scripts
-- [x] Sync README and current validation strategy
-- **Status:** complete
+### Phase 5: Delivery
+- [x] Review touched files
+- [x] Summarize architecture changes and remaining risks
+- [ ] Deliver outcome to user
+- **Status:** in_progress
 
 ## Key Questions
-1. `docs/plan.md` 定义的目标能力，当前实现覆盖到了哪些部分？
-2. 当前代码结构的主要问题是功能缺失、抽象失衡，还是工程化能力不足？
-3. 如果以重构为目标，最小可落地且收益最高的切入顺序是什么？
+1. 当前 summary 跑偏的根因在 prompt、IR 还是 fallback？
+2. 仅靠 Git `Rxxx` rename 是否足以支持“纯迁移”判断？
+3. 如何在不继续堆路径特判的前提下，让 summary 稳定识别“架构重组而非行为变更”？
 
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
-| 以 `docs/plan.md` 作为主要设计基线 | 用户明确要求基于技术文档做对照评估 |
-| 本轮优先产出方案而非直接大规模改代码 | 用户要求“优先输出改动方案” |
-| 以“能力缺口 + 结构债务 + 工程保障”三层输出重构方案 | 便于区分产品缺失与代码治理问题 |
-| Phase 1 先落命令语义与 mixed workspace 默认输入 | 这是后续重构的产品边界前提 |
-| 收尾阶段优先补测试与验证脚本，不强行开启全局 strict | 避免把收尾扩展成大规模编译修复工程 |
+| 主题判断前移到 IR | 让 prompt 组织语言而不是继续猜测代码意图 |
+| 为迁移场景增加 `relocation` / `structure` / `behavior` 语义 | 通用 CR 助手需要的是证据，而不是仓库路径特判 |
+| fallback 只保留兜底格式化职责 | 降低主模型失手时的二次误判概率 |
+| 为 `D + A` 增加纯迁移识别 | Git 未识别 rename 时仍要能判断“仅转移文件” |
 
 ## Errors Encountered
 | Error | Attempt | Resolution |
 |-------|---------|------------|
-| `doc` 目录不存在，实际为 `docs` | 1 | 改用 `docs/plan.md` 继续分析 |
+|       | 1       |            |
 
 ## Notes
-- 先完成文档与代码映射，再输出重构建议
-- 避免在未读源码前给出具体重构结论
-- 当前结论指向渐进式重构，而非推倒重写
+- 本轮改造不再增加新的仓库特异 prompt 规则，而是优先补足 IR 事实表达能力。
+- 架构重组场景下，summary 必须优先解释目录分层、职责迁移和边界收敛，不能把文件迁移虚构成用户交互变化。
+- 已完成类型检查、构建和测试验证，后续仍可继续提升 relocation 相似度匹配策略。

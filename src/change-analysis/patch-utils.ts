@@ -1,6 +1,14 @@
 import {getFileRole, getGroupKey} from './file-classifier.js';
 import type {ChangedFile, FilePatch, PatchLineStats} from './types.js';
 
+/** 迁移识别结果 */
+export interface RelocationDetection {
+  /** 当前文件到原文件的映射 */
+  movedFromByFile: Map<string, string>;
+  /** 纯迁移文件集合 */
+  pureRelocationFiles: Set<string>;
+}
+
 /**
  * @description 解析文件状态文本。
  * @param {string} nameStatus 文件状态文本。
@@ -127,6 +135,56 @@ export function optimizeRenameOnlyPatches(patches: FilePatch[]): FilePatch[] {
 }
 
 /**
+ * @description 识别 rename-only 与 D/A 形式的纯迁移文件。
+ * @param {ChangedFile[]} files 文件列表。
+ * @param {FilePatch[]} patches 分文件补丁。
+ * @return {RelocationDetection} 迁移识别结果。
+ */
+export function detectRelocatedFiles(files: ChangedFile[], patches: FilePatch[]): RelocationDetection {
+  const movedFromByFile = new Map<string, string>();
+  const pureRelocationFiles = new Set<string>();
+  const patchMap = new Map(patches.map((item) => [item.path, item.content]));
+
+  files.forEach((item) => {
+    if (/^R/.test(item.status) && item.oldPath) {
+      movedFromByFile.set(item.path, item.oldPath);
+      pureRelocationFiles.add(item.path);
+      pureRelocationFiles.add(item.oldPath);
+    }
+  });
+
+  const deletedCandidates = files.filter((item) => item.status.startsWith('D'));
+  const addedCandidates = files.filter((item) => item.status.startsWith('A'));
+  const deletedBodies = deletedCandidates
+    .map((item) => ({
+      path: item.path,
+      signature: buildPatchBodySignature(patchMap.get(item.path) || '', 'removed')
+    }))
+    .filter((item) => item.signature);
+
+  addedCandidates.forEach((item) => {
+    const signature = buildPatchBodySignature(patchMap.get(item.path) || '', 'added');
+    if (!signature) {
+      return;
+    }
+
+    const matched = deletedBodies.find((candidate) => candidate.signature === signature && !movedFromByFile.has(item.path));
+    if (!matched) {
+      return;
+    }
+
+    movedFromByFile.set(item.path, matched.path);
+    pureRelocationFiles.add(item.path);
+    pureRelocationFiles.add(matched.path);
+  });
+
+  return {
+    movedFromByFile,
+    pureRelocationFiles
+  };
+}
+
+/**
  * @description 统计每个补丁文件的增删行数。
  * @param {FilePatch[]} patches 分文件补丁。
  * @return {Map<string, PatchLineStats>} 行数统计映射。
@@ -161,6 +219,28 @@ export function buildPatchLineStats(patches: FilePatch[]): Map<string, PatchLine
   });
 
   return stats;
+}
+
+/**
+ * @description 构建补丁正文签名，用于识别 D/A 形式的纯迁移。
+ * @param {string} patchContent 补丁内容。
+ * @param {'added'|'removed'} mode 内容方向。
+ * @return {string} 归一化后的正文签名。
+ */
+function buildPatchBodySignature(patchContent: string, mode: 'added' | 'removed'): string {
+  const prefixes = mode === 'added' ? ['+'] : ['-'];
+  return patchContent
+    .split('\n')
+    .filter((line) => {
+      if (!line || /^(\+\+\+|---|@@|diff --git|index |similarity index |rename from |rename to )/.test(line)) {
+        return false;
+      }
+
+      return prefixes.some((prefix) => line.startsWith(prefix));
+    })
+    .map((line) => line.slice(1).trim())
+    .filter(Boolean)
+    .join('\n');
 }
 
 /**

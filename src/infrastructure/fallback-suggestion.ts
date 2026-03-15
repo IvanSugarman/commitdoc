@@ -1,5 +1,5 @@
-import type {BriefType} from './commands.js';
-import type {CommitFlowBrief, CommitSummaryBrief, CommitTitleBrief, CrDescriptionBrief, GeneratedBrief} from './briefs.js';
+import type {BriefType} from '../app/commands.js';
+import type {CommitFlowBrief, CommitSummaryBrief, CommitTitleBrief, CrDescriptionBrief, GeneratedBrief} from '../domain/briefs.js';
 
 /**
  * @typedef {Object} CommitSuggestion
@@ -841,6 +841,10 @@ function inferFocus(files, keywords) {
   const joinedPaths = files.map((item) => item.path.toLowerCase()).join(' ');
   const joinedKeywords = keywords.join(' ');
 
+  if (/(src\/app|src\/application|src\/domain|src\/infrastructure|architecture|restructure|relocation|boundary|layer)/.test(joinedPaths + joinedKeywords)) {
+    return '目录分层与架构设计';
+  }
+
   if (/(prompt|summary|semantic|subject|bullet|fallback|parser|json)/.test(joinedPaths + joinedKeywords)) {
     return '摘要生成逻辑';
   }
@@ -865,7 +869,7 @@ function inferFocus(files, keywords) {
     return '提交流程';
   }
 
-  if (/(cli|ink|loading-state|progress|status|panel|feedback)/.test(joinedPaths + joinedKeywords)) {
+  if (/(cli|ink|loading-state|progress|status|panel|feedback)/.test(joinedPaths + joinedKeywords) && /(behavior|interaction|render|display|ui)/.test(joinedKeywords)) {
     return '交互反馈体验';
   }
 
@@ -1239,6 +1243,10 @@ function resolveOutputLimits(outputProfileSection, irOverviewSection) {
  * @return {string} 变更目的。
  */
 function buildFallbackChangePurpose(focus, themes, userVisibleSurfaces = []) {
+  if (themes.includes('目录分层与架构重组')) {
+    return '这次改动主要围绕目录分层与架构重组展开，目的是收敛模块职责边界，并避免把纯迁移误判成真实行为变化。';
+  }
+
   if (userVisibleSurfaces.length > 0) {
     return `这次改动主要为了优化${userVisibleSurfaces.slice(0, 2).join('、')}，让相关行为变化在用户可见层面更清晰、更一致。`;
   }
@@ -1259,6 +1267,10 @@ function buildFallbackChangePurpose(focus, themes, userVisibleSurfaces = []) {
 function buildFallbackReviewerFocus(template, themes, userVisibleSurfaces = [], irRisks) {
   if (template.trim()) {
     return template.trim();
+  }
+
+  if (themes.includes('目录分层与架构重组')) {
+    return '请重点关注纯迁移与真实行为变化是否被正确区分，并确认新的目录边界没有引入多余耦合。';
   }
 
   if (userVisibleSurfaces.length > 0) {

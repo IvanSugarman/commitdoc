@@ -6,7 +6,7 @@ import {fileURLToPath} from 'node:url';
 const ENV_MODULE_PATH = fileURLToPath(import.meta.url);
 
 /** 项目根目录 */
-export const PROJECT_ROOT = path.dirname(path.dirname(ENV_MODULE_PATH));
+export const PROJECT_ROOT = path.dirname(path.dirname(path.dirname(ENV_MODULE_PATH)));
 
 /** 环境变量目录 */
 export const ENV_DIR = path.join(PROJECT_ROOT, '.env');

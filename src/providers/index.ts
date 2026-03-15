@@ -1,4 +1,4 @@
-import type {BriefType} from '../commands.js';
+import type {BriefType} from '../app/commands.js';
 import {getArkConfig, generateSuggestion as generateArkSuggestion} from './ark.js';
 import {createOpenAICompatibleConfig, generateWithOpenAICompatible} from './openai-compatible.js';
 import {getOpenAIConfig, generateSuggestion as generateOpenAISuggestion} from './openai.js';

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildExecutionViewModel, buildLoadingViewModel, getPhaseLabel} from '../dist/loading-state.js';
+import {buildExecutionViewModel, buildLoadingViewModel, getPhaseLabel} from '../dist/app/loading-state.js';
 
 test('getPhaseLabel returns localized labels', () => {
   assert.equal(getPhaseLabel('git'), 'Git 提取');

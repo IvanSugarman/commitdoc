@@ -1,5 +1,5 @@
-import {buildChangeIR} from './change-analysis/ir-builder.js';
-import {buildContextSummary} from './change-analysis/context-extractor.js';
+import {buildChangeIR} from '../change-analysis/ir-builder.js';
+import {buildContextSummary} from '../change-analysis/context-extractor.js';
 import {
   buildFileSummary,
   buildFilesOverview,
@@ -8,13 +8,13 @@ import {
   isHighContextFile,
   isIgnoredFile,
   sortFilesByPriority
-} from './change-analysis/file-classifier.js';
-import {buildPatchLineStats, compressPatchSections, optimizeRenameOnlyPatches, parseChangedFiles, splitPatchByFile} from './change-analysis/patch-utils.js';
-import type {FilePatch, SummaryChanges, SummaryStrategy} from './change-analysis/types.js';
-import {collectWorkspaceSnapshot, executeGit, isGitRepo} from './git/workspace.js';
-import {hashParts, readJsonCache, writeJsonCache, writePipelineLog} from './model-log.js';
+} from '../change-analysis/file-classifier.js';
+import {buildPatchLineStats, compressPatchSections, optimizeRenameOnlyPatches, parseChangedFiles, splitPatchByFile} from '../change-analysis/patch-utils.js';
+import type {FilePatch, SummaryChanges, SummaryStrategy} from '../change-analysis/types.js';
+import {collectWorkspaceSnapshot, executeGit, isGitRepo} from '../git/workspace.js';
+import {hashParts, readJsonCache, writeJsonCache, writePipelineLog} from '../infrastructure/model-log.js';
 
-export {isGitRepo} from './git/workspace.js';
+export {isGitRepo} from '../git/workspace.js';
 
 /**
  * @description 统计摘要策略。

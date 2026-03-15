@@ -7,7 +7,7 @@ import {fileURLToPath} from 'node:url';
 const CURRENT_FILE = fileURLToPath(import.meta.url);
 
 /** @type {string} */
-const PROJECT_ROOT = path.dirname(path.dirname(CURRENT_FILE));
+const PROJECT_ROOT = path.dirname(path.dirname(path.dirname(CURRENT_FILE)));
 
 /** @type {string} */
 const DEBUG_DIR = path.join(PROJECT_ROOT, '.gai-debug');

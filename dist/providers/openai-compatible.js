@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
-import { buildBriefFromReasoning, buildFallbackBrief, parseGeneratedBrief } from '../fallback-suggestion.js';
-import { hashParts, readJsonCache, serializeModelResponse, writeJsonCache, writeModelLog, writePipelineLog } from '../model-log.js';
-import { BASE_SYSTEM_PROMPT } from '../prompt.js';
+import { buildBriefFromReasoning, buildFallbackBrief, parseGeneratedBrief } from '../infrastructure/fallback-suggestion.js';
+import { hashParts, readJsonCache, serializeModelResponse, writeJsonCache, writeModelLog, writePipelineLog } from '../infrastructure/model-log.js';
+import { BASE_SYSTEM_PROMPT } from '../domain/prompt.js';
 /**
  * @description 构建 OpenAI 兼容 Provider 配置。
  * @param {Partial<ProviderConfig>} overrides 覆盖配置。

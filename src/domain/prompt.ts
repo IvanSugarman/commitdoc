@@ -1,5 +1,5 @@
-import type { BriefType } from "./commands.js";
-import type { SummaryChanges } from "./change-analysis/types.js";
+import type { BriefType } from "../app/commands.js";
+import type { SummaryChanges } from "../change-analysis/types.js";
 
 type PromptInput = SummaryChanges;
 type OutputScale = "compact" | "standard" | "expansive";
@@ -107,7 +107,7 @@ export function buildPrompt(input: PromptInput, briefType: BriefType): string {
     "将 [NARRATIVE_HINT] 视为本次改动的高层叙事锚点，先回答为什么做这次改动，再展开关键变化与影响。",
     "将 [ACTION_CHECKLIST] 视为推荐的工程动作表达，优先总结统一协议、拆分职责、增强可观测性、自适应策略、测试校验等动作，而不是按文件逐项列举。",
     "将 [REVIEWER_FOCUS_TEMPLATE] 视为评审关注点模板，优先沿着契约传播、回退逻辑、provider 兼容、行为一致性这些高风险点来写。",
-    "如果存在 [USER_VISIBLE_SURFACES]，优先用它描述用户可感知的交互变化与影响范围，而不是回退成文件清单。",
+    "只有当 [USER_VISIBLE_SURFACES] 非空且本次改动未被结构重组主导时，才优先用它描述用户可感知的交互变化与影响范围，而不是回退成文件清单。",
     "在 IR 仍需补充文件级证据时，再参考 [FILES_OVERVIEW]。",
     "当 [SEMANTIC_HINTS] 与路径和补丁内容一致时，应将其视为高优先级上下文。",
     "将 [GROUP_SUMMARY] 视为本次改动的结构地图，避免只盯某一个文件。",
@@ -224,7 +224,7 @@ export function buildZhipuPrompt(
     "优先提炼一个模块级或业务级语义中心。",
     "先根据 [NARRATIVE_HINT] 给出高层目标，再展开关键变化。",
     "优先参考 [ACTION_CHECKLIST]，把输出写成工程动作，而不是模块清单。",
-    "如果存在 [USER_VISIBLE_SURFACES]，优先据此描述用户可感知的交互变化和影响面。",
+    "只有当 [USER_VISIBLE_SURFACES] 非空且本次改动未被结构重组主导时，才优先据此描述用户可感知的交互变化和影响面。",
     "优先按语义簇总结，例如脚本、文档、请求文件、命令或架构调整。",
     "如果存在多个高影响改动簇，必须覆盖 3 到 4 个簇，不要只保留一个配套改动。",
     "优先覆盖 [THEME_CHECKLIST] 中列出的主题，尤其是命令/brief、分析链路、provider/prompt、缓存/日志、测试/文档等真实存在的主题。",
@@ -296,14 +296,14 @@ function buildBriefRules(
 
   if (briefType === "commit-summary") {
     return [
-      "请返回严格 JSON，字段只有：bullets。",
+    "请返回严格 JSON，字段只有：bullets。",
       `bullets 必须是一个数组，包含 ${outputProfile.summaryMin} 到 ${outputProfile.summaryMax} 条有语义价值的中文短句。`,
       "不要返回 title 或任何额外字段。",
       `每条 bullet 应尽量覆盖一个不同的高影响主题，并遵循 [OUTPUT_PROFILE]；当前建议是 ${outputProfile.coverageHint}。`,
       "第一条 bullet 优先概括本次改动的总体目标或重构方向，而不是直接列模块名。",
-      "bullets 优先写成工程动作，例如统一协议、拆分职责、增强可观测性、引入自适应策略、补齐测试校验，而不是“新增 xxx.ts 模块”。",
-    "如果 [THEME_CHECKLIST] 包含用户可感知交互与反馈，优先描述交互反馈、等待体验、状态变化或执行回执等用户可感知变化，不要先写抽类型、拆文件或补测试。",
-      "如果本次改动明显跨越多个模块簇，宁可输出更多条目，也不要为了套模板压缩成 3 到 4 条。"
+    "bullets 优先写成工程动作，例如统一协议、拆分职责、增强可观测性、引入自适应策略、补齐测试校验，而不是“新增 xxx.ts 模块”。",
+    "如果 [IR_OVERVIEW] 中 primaryIntent=architecture-restructure 或 hasPureRelocations=true，应优先描述目录分层、模块迁移和边界收敛，不要把它写成交互体验变化。",
+    "如果本次改动明显跨越多个模块簇，宁可输出更多条目，也不要为了套模板压缩成 3 到 4 条。"
     ];
   }
 
@@ -319,7 +319,8 @@ function buildBriefRules(
     "changePurpose 应概括这次重构或变更的总体目标，而不是只描述单个子模块。",
     "keyChanges 优先写成工程动作，不要让每一条都以文件名或模块名开头。",
     "impactScope 优先描述受影响的系统层、运行时行为或协作边界，不要简单重复文件清单。",
-    "如果 [THEME_CHECKLIST] 包含用户可感知交互与反馈，keyChanges 和 impactScope 应优先描述交互反馈、等待体验、状态变化或执行回执等用户可感知变化。",
+    "只有当 [USER_VISIBLE_SURFACES] 非空且 [IR_OVERVIEW] 明确指向 behavior-change 时，才允许把交互反馈、等待体验或执行回执写成主线。",
+    "如果 [IR_OVERVIEW] 中 primaryIntent=architecture-restructure 或 hasPureRelocations=true，应优先描述目录分层、模块迁移和架构边界收敛。",
     "reviewerFocus 必须优先遵循 [REVIEWER_FOCUS_TEMPLATE]，只允许在不改变风险类别的前提下做轻微措辞调整。",
     `keyChanges 和 impactScope 应尽量覆盖不同的高影响主题，并遵循 [OUTPUT_PROFILE]；当前建议是 ${outputProfile.coverageHint}。`
   ];
@@ -418,11 +419,17 @@ function buildNarrativeHint(input: PromptInput, profile: OutputProfile): string 
   const groups = new Set(sortChangesForPrompt(input).map((item) => getClusterKey(item.file)));
   const hasCommand = hasCommandContractChanges(input);
   const hasAnalysis = groups.has("src/git") || groups.has("src/change-analysis");
-  const hasModel = groups.has("src/providers") || groups.has("src/prompt") || groups.has("src/fallback-suggestion");
-  const hasLog = groups.has("src/model-log");
+  const hasModel = groups.has("src/providers") || groups.has("src/domain") || groups.has("src/infrastructure");
+  const hasLog = input.ir.changes.some((item) => item.file.includes('model-log'));
   const hasTests = input.ir.tests.length > 0;
   const hasUserVisibleInteraction = hasUserVisibleInteractionChanges(input);
+  const architectureDominant = shouldPrioritizeArchitectureNarrative(input);
   const topThemes = themes.slice(0, 4).join("、");
+
+  if (architectureDominant) {
+    const suffix = hasTests ? "并同步调整测试与工程校验" : "并降低后续演进的耦合成本";
+    return `这次改动以目录分层与架构重组为主，目标是收敛模块职责边界、明确依赖方向，${suffix}。`;
+  }
 
   if (hasUserVisibleInteraction && !hasAnalysis && !hasModel) {
     return "这次改动主要围绕用户可感知的交互反馈展开，目标是统一等待、状态变化或执行回执的表达方式，并让实际行为变化更容易被感知和验证。";
@@ -453,8 +460,14 @@ function buildActionChecklist(input: PromptInput): string {
   const themes = getThemeChecklistItems(input);
   const semanticHints = input.semanticHints || "";
   const actions: string[] = [];
+  const architectureDominant = shouldPrioritizeArchitectureNarrative(input);
 
-  if (themes.includes("用户可感知交互与反馈")) {
+  if (themes.includes("目录分层与架构重组")) {
+    actions.push("梳理目录分层与模块边界，收敛入口、领域、应用服务和基础设施职责");
+    actions.push("将纯迁移与结构重组从行为变化中剥离，降低总结链路对路径噪音的敏感度");
+  }
+
+  if (!architectureDominant && themes.includes("用户可感知交互与反馈")) {
     actions.push("统一用户可感知的交互反馈，收敛等待态、状态展示或执行回执的表达方式");
     actions.push("调整状态推进与反馈节奏，让实际行为变化在交互层更容易被理解和验证");
   }
@@ -495,8 +508,14 @@ function buildReviewerFocusTemplate(input: PromptInput): string {
   const themes = getThemeChecklistItems(input);
   const semanticHints = input.semanticHints || "";
   const checks: string[] = [];
+  const architectureDominant = shouldPrioritizeArchitectureNarrative(input);
 
-  if (themes.includes("用户可感知交互与反馈")) {
+  if (themes.includes("目录分层与架构重组")) {
+    checks.push("纯迁移文件是否被误写成行为变化");
+    checks.push("新的目录分层是否真正收敛了模块职责和依赖方向");
+  }
+
+  if (!architectureDominant && themes.includes("用户可感知交互与反馈")) {
     checks.push("等待态、状态变化和执行回执是否准确反映真实行为");
     checks.push("不同阶段的交互反馈表达是否保持一致且不误导");
     checks.push("用户可见的节奏变化是否与真实耗时和状态推进相匹配");
@@ -536,7 +555,7 @@ function buildReviewerFocusTemplate(input: PromptInput): string {
  * @return {string} 用户可感知影响面。
  */
 function buildUserVisibleSurfaces(input: PromptInput): string {
-  if (!hasUserVisibleInteractionChanges(input)) {
+  if (!hasUserVisibleInteractionChanges(input) || shouldPrioritizeArchitectureNarrative(input)) {
     return "";
   }
   const evidence = [
@@ -581,6 +600,8 @@ function buildIROverview(input: PromptInput): string {
     `addedLines=${overview.addedLines}`,
     `deletedLines=${overview.deletedLines}`,
     `testsChanged=${tests.length}`,
+    `primaryIntent=${overview.primaryIntent}`,
+    `hasPureRelocations=${overview.hasPureRelocations ? 'true' : 'false'}`,
   ].join("\n");
 }
 
@@ -593,13 +614,18 @@ function buildIRChanges(input: PromptInput): string {
   return sortChangesForPrompt(input)
     .slice(0, 14)
     .map((item) => {
+      const symbolsList = item.symbols || [];
+      const dependencyChanges = item.dependencyChanges || [];
+      const changeKinds = item.changeKinds || [];
       const symbols =
-        item.symbols.length > 0 ? `\tsymbols=${item.symbols.join(",")}` : "";
+        symbolsList.length > 0 ? `\tsymbols=${symbolsList.join(",")}` : "";
       const dependencies =
-        item.dependencyChanges.length > 0
-          ? `\tdeps=${item.dependencyChanges.join(",")}`
+        dependencyChanges.length > 0
+          ? `\tdeps=${dependencyChanges.join(",")}`
           : "";
-      return `${item.file}\trole=${item.role}\tstatus=${item.status}\t+${item.added}/-${item.removed}\tsummary=${item.summary}${symbols}${dependencies}`;
+      const kinds = changeKinds.length > 0 ? `\tkinds=${changeKinds.join(",")}` : "";
+      const oldFile = item.oldFile ? `\toldFile=${item.oldFile}` : "";
+      return `${item.file}\trole=${item.role}\tstatus=${item.status}\t+${item.added}/-${item.removed}\tsummary=${item.summary}${oldFile}${kinds}${symbols}${dependencies}`;
     })
     .join("\n");
 }
@@ -665,8 +691,13 @@ function buildThemeChecklist(input: PromptInput): string {
 function getThemeChecklistItems(input: PromptInput): string[] {
   const groups = new Set(sortChangesForPrompt(input).map((item) => getClusterKey(item.file)));
   const themes: string[] = [];
+  const architectureDominant = shouldPrioritizeArchitectureNarrative(input);
 
-  if (hasUserVisibleInteractionChanges(input)) {
+  if (architectureDominant) {
+    themes.push("目录分层与架构重组");
+  }
+
+  if (!architectureDominant && hasUserVisibleInteractionChanges(input)) {
     themes.push("用户可感知交互与反馈");
   }
 
@@ -678,11 +709,11 @@ function getThemeChecklistItems(input: PromptInput): string[] {
     themes.push("变更分析与摘要压缩链路");
   }
 
-  if (groups.has("src/providers") || groups.has("src/prompt") || groups.has("src/fallback-suggestion")) {
+  if (groups.has("src/providers") || groups.has("src/domain") || groups.has("src/infrastructure")) {
     themes.push("模型调用、提示词与输出解析链路");
   }
 
-  if (groups.has("src/model-log")) {
+  if (input.ir.changes.some((item) => item.file.includes('model-log'))) {
     themes.push("缓存结构与中间态日志能力");
   }
 
@@ -741,15 +772,18 @@ function scoreChange(item: PromptInput["ir"]["changes"][number]) {
     other: 24
   };
   const pathScore =
-    /(src\/(cli|commands|briefs|git|prompt|fallback-suggestion|model-log|loading-state))/i.test(item.file) ? 70 :
+    /(src\/(cli|app|application|domain|infrastructure|git|change-analysis))/i.test(item.file) ? 70 :
     /(src\/providers\/)/i.test(item.file) ? 66 :
-    /(src\/change-analysis\/)/i.test(item.file) ? 64 :
     /(package\.json|README\.md)$/i.test(item.file) ? 28 :
     0;
   const symbolScore = Math.min(item.symbols.length, 4) * 6;
   const dependencyScore = Math.min(item.dependencyChanges.length, 4) * 5;
+  const kinds = item.changeKinds || [];
+  const relocationScore = kinds.includes('relocation') ? 18 : 0;
+  const structureScore = kinds.includes('structure') ? 16 : 0;
+  const behaviorScore = kinds.includes('behavior') ? 22 : 0;
 
-  return (roleScoreMap[item.role] || 0) + pathScore + Math.min(item.total, 220) / 2 + symbolScore + dependencyScore;
+  return (roleScoreMap[item.role] || 0) + pathScore + Math.min(item.total, 220) / 2 + symbolScore + dependencyScore + relocationScore + structureScore + behaviorScore;
 }
 
 /**
@@ -780,19 +814,98 @@ function getClusterKey(filePath: string) {
  * @return {boolean} 是否命中用户可见交互主题。
  */
 function hasUserVisibleInteractionChanges(input: PromptInput) {
-  const groups = new Set(sortChangesForPrompt(input).map((item) => getClusterKey(item.file)));
+  if (input.ir.overview.primaryIntent === 'architecture-restructure' || input.ir.overview.hasPureRelocations) {
+    return false;
+  }
+
+  const behaviorChanges = input.ir.changes.filter((item) => (item.changeKinds || []).includes('behavior'));
+  if (behaviorChanges.length === 0) {
+    return false;
+  }
+
+  const uiBehaviorChanges = behaviorChanges.filter((item) => isUserVisibleCandidateChange(item));
+  if (uiBehaviorChanges.length === 0) {
+    return false;
+  }
+
+  const standaloneUiBehaviorChanges = uiBehaviorChanges.filter((item) => {
+    const changeKinds = item.changeKinds || [];
+    return !changeKinds.includes('structure') && !changeKinds.includes('relocation');
+  });
+
+  if (standaloneUiBehaviorChanges.length === 0) {
+    return false;
+  }
+
+  const structureChanges = input.ir.changes.filter((item) => {
+    const changeKinds = item.changeKinds || [];
+    return changeKinds.includes('structure') || changeKinds.includes('relocation');
+  });
+  if (structureChanges.length >= standaloneUiBehaviorChanges.length * 2) {
+    return false;
+  }
+
   const evidence = [
     input.semanticHints || "",
     input.filesOverview || "",
     input.fileSummary || "",
     input.groupSummary || "",
-    input.ir.changes.map((item) => `${item.file}\t${item.summary}`).join("\n"),
+    standaloneUiBehaviorChanges
+      .map((item) => `${item.file}\t${item.summary}\t${(item.symbols || []).join(',')}`)
+      .join("\n"),
   ].join("\n");
 
   return (
-    groups.has("src/loading-state") ||
-    /(loading-state|LoadingViewModel|progress|spinner|loading|ui|view|panel|feedback|status|render|交互|加载态|进度条|视觉|反馈|执行进度|状态变化)/i.test(evidence)
+    /(loading-state|LoadingViewModel|ExecutionViewModel|PhaseName|ExecutionStepStatus|progress|spinner|loading|ui|view|panel|feedback|status|render|交互|加载态|进度条|视觉|反馈|执行进度|状态变化)/i.test(evidence)
   );
+}
+
+/**
+ * @description 判断当前改动是否应优先走架构叙事。
+ * @param {PromptInput} input 摘要输入。
+ * @return {boolean} 是否应优先走架构叙事。
+ */
+function shouldPrioritizeArchitectureNarrative(input: PromptInput) {
+  if (input.ir.overview.primaryIntent === 'architecture-restructure' || input.ir.overview.hasPureRelocations) {
+    return true;
+  }
+
+  const structureChanges = input.ir.changes.filter((item) => {
+    const changeKinds = item.changeKinds || [];
+    return changeKinds.includes('structure') || changeKinds.includes('relocation');
+  });
+  const behaviorChanges = input.ir.changes.filter((item) => (item.changeKinds || []).includes('behavior'));
+  const layeredPathMoves = structureChanges.filter((item) => {
+    if (!item.oldFile) {
+      return false;
+    }
+
+    return item.oldFile.split('/').length !== item.file.split('/').length;
+  });
+  const rootLevelReorganizationCount = input.ir.changes.filter((item) => {
+    return /^[^/]+\/[^/]+\.tsx?$/.test(item.file) || Boolean(item.oldFile && /^[^/]+\/[^/]+\.tsx?$/.test(item.oldFile));
+  }).length;
+
+  return (
+    structureChanges.length >= 3 &&
+    (structureChanges.length > behaviorChanges.length || layeredPathMoves.length >= 2 || rootLevelReorganizationCount >= 4)
+  );
+}
+
+/**
+ * @description 判断文件级变更是否提供了用户可见交互证据。
+ * @param {PromptInput["ir"]["changes"][number]} item IR 变更项。
+ * @return {boolean} 是否属于用户可见交互候选。
+ */
+function isUserVisibleCandidateChange(item: PromptInput["ir"]["changes"][number]) {
+  const evidence = [
+    item.file,
+    item.summary,
+    (item.symbols || []).join(' '),
+    (item.exportedSymbols || []).join(' ')
+  ].join(' ');
+
+  return /(loading-state|LoadingViewModel|ExecutionViewModel|PhaseName|ExecutionStepStatus|progress|spinner|loading|ui|view|panel|feedback|status|render|display|交互|加载态|进度条|反馈|执行回执|状态变化)/i.test(evidence);
 }
 
 /**
@@ -812,7 +925,8 @@ function hasCommandContractChanges(input: PromptInput) {
 
   return (
     groups.has("src/commands") ||
-    groups.has("src/briefs") ||
+    groups.has("src/app") ||
+    groups.has("src/domain") ||
     /(BriefType|resolveCliCommand|getBriefOption|命令入口|brief 契约)/i.test(evidence)
   );
 }

@@ -7,6 +7,9 @@ export type SummaryStrategy = 'incremental' | 'contextual' | 'compressed';
 /** 文件语义角色 */
 export type FileRole = 'script' | 'request' | 'doc' | 'config' | 'type' | 'test' | 'other';
 
+/** 变更语义类别 */
+export type ChangeKind = 'behavior' | 'contract' | 'structure' | 'relocation' | 'config' | 'test' | 'doc';
+
 /** 变更文件 */
 export interface ChangedFile {
   /** 文件状态 */
@@ -57,6 +60,8 @@ export interface SummaryStats {
 export interface ChangeIRFile {
   /** 文件路径 */
   file: string;
+  /** 迁移前文件路径 */
+  oldFile?: string;
   /** 文件角色 */
   role: FileRole;
   /** 变更状态 */
@@ -69,8 +74,23 @@ export interface ChangeIRFile {
   total: number;
   /** 变更符号 */
   symbols: string[];
+  /** 导出符号 */
+  exportedSymbols: string[];
   /** 依赖变更 */
   dependencyChanges: string[];
+  /** 变更语义类别 */
+  changeKinds: ChangeKind[];
+  /** 证据快照 */
+  evidence: {
+    /** 是否包含代码逻辑变化 */
+    hasCodeLogicChange: boolean;
+    /** 是否包含导出形状变化 */
+    hasExportShapeChange: boolean;
+    /** 是否包含依赖变化 */
+    hasDependencyChange: boolean;
+    /** 是否是纯路径迁移 */
+    hasPathOnlyMove: boolean;
+  };
   /** 文件摘要 */
   summary: string;
 }
@@ -89,6 +109,10 @@ export interface ChangeIR {
     deletedLines: number;
     /** 摘要策略 */
     strategy: SummaryStrategy;
+    /** 主导意图 */
+    primaryIntent: 'architecture-restructure' | 'behavior-change' | 'contract-alignment' | 'tooling' | 'mixed';
+    /** 是否包含纯迁移 */
+    hasPureRelocations: boolean;
   };
   /** 文件级变更 */
   changes: ChangeIRFile[];

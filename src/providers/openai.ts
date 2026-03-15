@@ -1,4 +1,4 @@
-import type {BriefType} from '../commands.js';
+import type {BriefType} from '../app/commands.js';
 import {createOpenAICompatibleConfig, generateWithOpenAICompatible} from './openai-compatible.js';
 
 /**

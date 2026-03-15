@@ -9,14 +9,14 @@ import { promisify } from 'node:util';
 import readline from 'node:readline/promises';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box, Text, render, useApp, useInput } from 'ink';
-import { getCommitPayload, normalizeCrDescriptionBrief, renderBrief } from './briefs.js';
-import { allowsGitExecution, formatHelpText, getBriefOptions, getBriefOption, resolveCliCommand } from './commands.js';
-import { ACTIVE_ENV_PATH, ENV_DIR, PROJECT_ROOT } from './env.js';
-import { applyCommitAndPush, getChangesForSummary, isGitRepo } from './git.js';
-import { buildExecutionViewModel, buildLoadingViewModel, getPhaseLabel } from './loading-state.js';
-import { writePipelineLog } from './model-log.js';
-import { generateSuggestion, getProviderDefaults, getProviderName, getResolvedProviderConfig } from './openai.js';
-import { BASE_SYSTEM_PROMPT, buildPrompt, buildZhipuPrompt } from './prompt.js';
+import { getCommitPayload, normalizeCrDescriptionBrief, renderBrief } from './domain/briefs.js';
+import { allowsGitExecution, formatHelpText, getBriefOptions, getBriefOption, resolveCliCommand } from './app/commands.js';
+import { ACTIVE_ENV_PATH, ENV_DIR, PROJECT_ROOT } from './infrastructure/env.js';
+import { applyCommitAndPush, getChangesForSummary, isGitRepo } from './application/git-summary.js';
+import { buildExecutionViewModel, buildLoadingViewModel, getPhaseLabel } from './app/loading-state.js';
+import { writePipelineLog } from './infrastructure/model-log.js';
+import { generateSuggestion, getProviderDefaults, getProviderName, getResolvedProviderConfig } from './infrastructure/openai.js';
+import { BASE_SYSTEM_PROMPT, buildPrompt, buildZhipuPrompt } from './domain/prompt.js';
 /** @type {(file: string, args: string[]) => Promise<{stdout: string; stderr: string}>} */
 const execFileAsync = promisify(execFile);
 /** @type {readonly string[]} */
@@ -52,7 +52,7 @@ const DEFAULT_ENV = {
 /**
  * @typedef {Object} StepState
  * @property {'add'|'commit'|'push'} name 步骤名称。
- * @property {import('./loading-state.js').ExecutionStepStatus} status 步骤状态。
+ * @property {import('./app/loading-state.js').ExecutionStepStatus} status 步骤状态。
  */
 /**
  * @typedef {Object} DoctorItem
@@ -448,7 +448,7 @@ function estimateTokens(chars) {
 }
 /**
  * @description 根据当前 provider 选择实际使用的提示词。
- * @param {import('./prompt.js').PromptInput} summary 摘要输入。
+ * @param {import('./domain/prompt.js').PromptInput} summary 摘要输入。
  * @return {string} 最终提示词。
  */
 function buildProviderPrompt(summary, briefType) {

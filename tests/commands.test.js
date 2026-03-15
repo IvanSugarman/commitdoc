@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {allowsGitExecution, formatHelpText, resolveCliCommand} from '../dist/commands.js';
+import {allowsGitExecution, formatHelpText, resolveCliCommand} from '../dist/app/commands.js';
 
 test('resolveCliCommand parses brief command', () => {
   const result = resolveCliCommand(['brief', 'cr-description']);

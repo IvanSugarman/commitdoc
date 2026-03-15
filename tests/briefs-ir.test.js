@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
+import {readFileSync} from 'node:fs';
 import {mkdtemp, writeFile} from 'node:fs/promises';
-import {buildFallbackBrief, parseGeneratedBrief} from '../dist/fallback-suggestion.js';
+import {buildFallbackBrief, parseGeneratedBrief} from '../dist/infrastructure/fallback-suggestion.js';
 import {buildChangeIR} from '../dist/change-analysis/ir-builder.js';
-import {BASE_SYSTEM_PROMPT, buildPrompt, buildZhipuPrompt} from '../dist/prompt.js';
+import {BASE_SYSTEM_PROMPT, buildPrompt, buildZhipuPrompt} from '../dist/domain/prompt.js';
 
 test('buildChangeIR produces symbols and risks from TS file changes', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'gai-ir-'));
@@ -479,7 +480,15 @@ test('buildPrompt prioritizes user-visible interaction changes', () => {
           removed: 0,
           total: 120,
           symbols: ['buildLoadingViewModel', 'buildExecutionViewModel'],
+          exportedSymbols: ['buildLoadingViewModel', 'buildExecutionViewModel'],
           dependencyChanges: [],
+          changeKinds: ['behavior'],
+          evidence: {
+            hasCodeLogicChange: true,
+            hasExportShapeChange: true,
+            hasDependencyChange: false,
+            hasPathOnlyMove: false
+          },
           summary: 'added script file around buildLoadingViewModel, buildExecutionViewModel'
         },
         {
@@ -490,7 +499,15 @@ test('buildPrompt prioritizes user-visible interaction changes', () => {
           removed: 8,
           total: 48,
           symbols: ['App'],
+          exportedSymbols: [],
           dependencyChanges: ['./loading-state.js'],
+          changeKinds: ['behavior'],
+          evidence: {
+            hasCodeLogicChange: true,
+            hasExportShapeChange: false,
+            hasDependencyChange: true,
+            hasPathOnlyMove: false
+          },
           summary: 'updated script file around App with dependency changes: ./loading-state.js'
         },
         {
@@ -501,12 +518,29 @@ test('buildPrompt prioritizes user-visible interaction changes', () => {
           removed: 0,
           total: 28,
           symbols: [],
+          exportedSymbols: [],
           dependencyChanges: [],
+          changeKinds: ['test'],
+          evidence: {
+            hasCodeLogicChange: false,
+            hasExportShapeChange: false,
+            hasDependencyChange: false,
+            hasPathOnlyMove: false
+          },
           summary: 'added test file'
         }
       ],
       tests: ['tests/loading-state.test.js'],
-      risks: []
+      risks: [],
+      overview: {
+        source: 'working-tree',
+        filesChanged: 3,
+        addedLines: 168,
+        deletedLines: 8,
+        strategy: 'compressed',
+        primaryIntent: 'behavior-change',
+        hasPureRelocations: false
+      }
     }
   };
 
@@ -516,6 +550,316 @@ test('buildPrompt prioritizes user-visible interaction changes', () => {
   assert.match(prompt, /\[USER_VISIBLE_SURFACES\]/);
   assert.match(prompt, /等待阶段的反馈节奏与进度表达/);
   assert.match(prompt, /等待态、状态变化和执行回执是否准确反映真实行为/);
+});
+
+test('buildPrompt prefers architecture narrative for pure relocations', () => {
+  const summary = {
+    source: 'working-tree',
+    strategy: 'compressed',
+    nameStatus: ['D\tsrc/loading-state.ts', 'A\tsrc/app/loading-state.ts', 'M\tsrc/cli.ts'].join('\n'),
+    patch: ['-export function buildLoadingViewModel() {}', '+export function buildLoadingViewModel() {}'].join('\n'),
+    fileSummary: ['D\tsrc/loading-state.ts\thigh-context', 'A\tsrc/app/loading-state.ts\thigh-context', 'M\tsrc/cli.ts\thigh-context'].join('\n'),
+    filesOverview: ['D\tsrc/loading-state.ts\tscript +0/-120', 'A\tsrc/app/loading-state.ts\tscript +120/-0', 'M\tsrc/cli.ts\tscript +12/-12'].join('\n'),
+    groupSummary: ['src/app\tcount=1\troles=script\ttotal=120', 'src/cli\tcount=1\troles=script\ttotal=24'].join('\n'),
+    semanticHints: ['高影响模块: src/app, src/cli', '命令入口与 brief 渲染链路发生调整'].join('\n'),
+    contextSummary: '',
+    stats: {
+      fileCount: 3,
+      ignoredFileCount: 0,
+      highContextFileCount: 3,
+      patchChars: 64
+    },
+    ir: {
+      overview: {
+        source: 'working-tree',
+        filesChanged: 3,
+        addedLines: 132,
+        deletedLines: 132,
+        strategy: 'compressed',
+        primaryIntent: 'architecture-restructure',
+        hasPureRelocations: true
+      },
+      changes: [
+        {
+          file: 'src/app/loading-state.ts',
+          oldFile: 'src/loading-state.ts',
+          role: 'script',
+          status: 'A',
+          added: 120,
+          removed: 0,
+          total: 120,
+          symbols: ['buildLoadingViewModel'],
+          exportedSymbols: ['buildLoadingViewModel'],
+          dependencyChanges: [],
+          changeKinds: ['relocation', 'structure'],
+          evidence: {
+            hasCodeLogicChange: false,
+            hasExportShapeChange: false,
+            hasDependencyChange: false,
+            hasPathOnlyMove: true
+          },
+          summary: 'relocated file from src/loading-state.ts to src/app/loading-state.ts'
+        },
+        {
+          file: 'src/loading-state.ts',
+          role: 'script',
+          status: 'D',
+          added: 0,
+          removed: 120,
+          total: 120,
+          symbols: [],
+          exportedSymbols: [],
+          dependencyChanges: [],
+          changeKinds: ['relocation', 'structure'],
+          evidence: {
+            hasCodeLogicChange: false,
+            hasExportShapeChange: false,
+            hasDependencyChange: false,
+            hasPathOnlyMove: true
+          },
+          summary: 'removed relocated file'
+        },
+        {
+          file: 'src/cli.ts',
+          role: 'script',
+          status: 'M',
+          added: 12,
+          removed: 12,
+          total: 24,
+          symbols: ['App'],
+          exportedSymbols: [],
+          dependencyChanges: ['./app/loading-state.js'],
+          changeKinds: ['structure', 'contract'],
+          evidence: {
+            hasCodeLogicChange: false,
+            hasExportShapeChange: false,
+            hasDependencyChange: true,
+            hasPathOnlyMove: false
+          },
+          summary: 'updated script file with dependency changes: ./app/loading-state.js'
+        }
+      ],
+      tests: [],
+      risks: []
+    }
+  };
+
+  const prompt = buildPrompt(summary, 'cr-description');
+  assert.match(prompt, /\[IR_OVERVIEW\][\s\S]*primaryIntent=architecture-restructure/);
+  assert.match(prompt, /\[THEME_CHECKLIST\]\n目录分层与架构重组/);
+  assert.doesNotMatch(prompt, /\[USER_VISIBLE_SURFACES\][\s\S]*等待阶段的反馈节奏与进度表达/);
+  assert.match(prompt, /优先描述目录分层、模块迁移和架构边界收敛/);
+});
+
+test('buildPrompt suppresses interaction theme when loading-state changes are part of restructuring', () => {
+  const summary = {
+    source: 'working-tree',
+    strategy: 'compressed',
+    nameStatus: [
+      'D\tsrc/loading-state.ts',
+      'D\tsrc/briefs.ts',
+      'A\tsrc/app/loading-state.ts',
+      'A\tsrc/domain/briefs.ts',
+      'M\tsrc/cli.ts',
+      'A\ttests/loading-state.test.js'
+    ].join('\n'),
+    patch: [
+      '-export function buildLoadingViewModel() {}',
+      '+export function buildLoadingViewModel() {}',
+      '-export type BriefType = "commit";',
+      '+export type BriefType = "commit" | "commit-summary";'
+    ].join('\n'),
+    fileSummary: [
+      'D\tsrc/loading-state.ts\thigh-context',
+      'D\tsrc/briefs.ts\thigh-context',
+      'A\tsrc/app/loading-state.ts\thigh-context',
+      'A\tsrc/domain/briefs.ts\thigh-context',
+      'M\tsrc/cli.ts\thigh-context',
+      'A\ttests/loading-state.test.js\tnormal'
+    ].join('\n'),
+    filesOverview: [
+      'D\tsrc/loading-state.ts\tscript +0/-120',
+      'D\tsrc/briefs.ts\tscript +0/-80',
+      'A\tsrc/app/loading-state.ts\tscript +120/-0',
+      'A\tsrc/domain/briefs.ts\tscript +80/-0',
+      'M\tsrc/cli.ts\tscript +18/-10',
+      'A\ttests/loading-state.test.js\ttest +24/-0'
+    ].join('\n'),
+    groupSummary: [
+      'src/app\tcount=1\troles=script\ttotal=120',
+      'src/domain\tcount=1\troles=script\ttotal=80',
+      'src/cli\tcount=1\troles=script\ttotal=28'
+    ].join('\n'),
+    semanticHints: [
+      '高影响模块: src/app, src/domain, src/cli',
+      '命令入口与 brief 渲染链路发生调整',
+      '包含测试覆盖或验证逻辑调整'
+    ].join('\n'),
+    contextSummary: '',
+    stats: {
+      fileCount: 6,
+      ignoredFileCount: 0,
+      highContextFileCount: 5,
+      patchChars: 180
+    },
+    ir: {
+      overview: {
+        source: 'working-tree',
+        filesChanged: 6,
+        addedLines: 242,
+        deletedLines: 210,
+        strategy: 'compressed',
+        primaryIntent: 'mixed',
+        hasPureRelocations: false
+      },
+      changes: [
+        {
+          file: 'src/app/loading-state.ts',
+          role: 'script',
+          status: 'A',
+          added: 120,
+          removed: 0,
+          total: 120,
+          symbols: ['buildLoadingViewModel', 'PhaseName'],
+          exportedSymbols: ['buildLoadingViewModel', 'PhaseName'],
+          dependencyChanges: [],
+          changeKinds: ['behavior', 'structure'],
+          evidence: {
+            hasCodeLogicChange: true,
+            hasExportShapeChange: true,
+            hasDependencyChange: false,
+            hasPathOnlyMove: false
+          },
+          summary: 'added script file around buildLoadingViewModel, PhaseName'
+        },
+        {
+          file: 'src/domain/briefs.ts',
+          role: 'script',
+          status: 'A',
+          added: 80,
+          removed: 0,
+          total: 80,
+          symbols: ['BriefType'],
+          exportedSymbols: ['BriefType'],
+          dependencyChanges: [],
+          changeKinds: ['contract', 'structure'],
+          evidence: {
+            hasCodeLogicChange: false,
+            hasExportShapeChange: true,
+            hasDependencyChange: false,
+            hasPathOnlyMove: false
+          },
+          summary: 'added script file around BriefType'
+        },
+        {
+          file: 'src/loading-state.ts',
+          role: 'script',
+          status: 'D',
+          added: 0,
+          removed: 120,
+          total: 120,
+          symbols: [],
+          exportedSymbols: [],
+          dependencyChanges: [],
+          changeKinds: ['structure'],
+          evidence: {
+            hasCodeLogicChange: false,
+            hasExportShapeChange: false,
+            hasDependencyChange: false,
+            hasPathOnlyMove: false
+          },
+          summary: 'removed script file'
+        },
+        {
+          file: 'src/briefs.ts',
+          role: 'script',
+          status: 'D',
+          added: 0,
+          removed: 80,
+          total: 80,
+          symbols: [],
+          exportedSymbols: [],
+          dependencyChanges: [],
+          changeKinds: ['structure'],
+          evidence: {
+            hasCodeLogicChange: false,
+            hasExportShapeChange: false,
+            hasDependencyChange: false,
+            hasPathOnlyMove: false
+          },
+          summary: 'removed script file'
+        },
+        {
+          file: 'src/cli.ts',
+          role: 'script',
+          status: 'M',
+          added: 18,
+          removed: 10,
+          total: 28,
+          symbols: ['App'],
+          exportedSymbols: [],
+          dependencyChanges: ['./app/loading-state.js', './domain/briefs.js'],
+          changeKinds: ['structure', 'contract'],
+          evidence: {
+            hasCodeLogicChange: false,
+            hasExportShapeChange: false,
+            hasDependencyChange: true,
+            hasPathOnlyMove: false
+          },
+          summary: 'updated script file with dependency changes: ./app/loading-state.js, ./domain/briefs.js'
+        },
+        {
+          file: 'tests/loading-state.test.js',
+          role: 'test',
+          status: 'A',
+          added: 24,
+          removed: 0,
+          total: 24,
+          symbols: [],
+          exportedSymbols: [],
+          dependencyChanges: [],
+          changeKinds: ['test'],
+          evidence: {
+            hasCodeLogicChange: false,
+            hasExportShapeChange: false,
+            hasDependencyChange: false,
+            hasPathOnlyMove: false
+          },
+          summary: 'added test file'
+        }
+      ],
+      tests: ['tests/loading-state.test.js'],
+      risks: []
+    }
+  };
+
+  const prompt = buildPrompt(summary, 'cr-description');
+  assert.match(prompt, /\[THEME_CHECKLIST\]\n目录分层与架构重组/);
+  assert.doesNotMatch(prompt, /\[THEME_CHECKLIST\][\s\S]*用户可感知交互与反馈/);
+  assert.doesNotMatch(prompt, /\[USER_VISIBLE_SURFACES\][\s\S]*等待阶段的反馈节奏与进度表达/);
+  assert.match(prompt, /这次改动以目录分层与架构重组为主/);
+});
+
+test('buildPrompt and fallback keep the real architecture restructure fixture on the architecture narrative', () => {
+  const fixturePath = new URL('./fixtures/architecture-restructure-summary.json', import.meta.url);
+  const summary = JSON.parse(readFileSync(fixturePath, 'utf8'));
+
+  const prompt = buildPrompt(summary, 'cr-description');
+  const zhipuPrompt = buildZhipuPrompt(summary, 'cr-description');
+  const fallbackBrief = buildFallbackBrief(prompt, '', 'cr-description');
+
+  assert.match(prompt, /\[THEME_CHECKLIST\][\s\S]*目录分层与架构重组/);
+  assert.doesNotMatch(prompt, /\[THEME_CHECKLIST\][\s\S]*用户可感知交互与反馈/);
+  assert.match(prompt, /这次改动以目录分层与架构重组为主/);
+  assert.doesNotMatch(prompt, /\[USER_VISIBLE_SURFACES\][\s\S]*等待阶段的反馈节奏与进度表达/);
+  assert.match(prompt, /梳理目录分层与模块边界/);
+
+  assert.match(zhipuPrompt, /\[THEME_CHECKLIST\][\s\S]*目录分层与架构重组/);
+  assert.doesNotMatch(zhipuPrompt, /\[THEME_CHECKLIST\][\s\S]*用户可感知交互与反馈/);
+
+  assert.equal(fallbackBrief.briefType, 'cr-description');
+  assert.match(fallbackBrief.changePurpose, /目录分层与架构重组/);
+  assert.match(fallbackBrief.reviewerFocus, /纯迁移|目录边界|模块职责/);
 });
 
 test('buildFallbackBrief uses generic reviewer focus for user-visible interaction changes', () => {

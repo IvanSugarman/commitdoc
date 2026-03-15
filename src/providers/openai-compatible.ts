@@ -1,9 +1,9 @@
 import OpenAI from 'openai';
-import type {BriefType} from '../commands.js';
-import type {GeneratedBrief} from '../briefs.js';
-import {buildBriefFromReasoning, buildFallbackBrief, parseGeneratedBrief} from '../fallback-suggestion.js';
-import {hashParts, readJsonCache, serializeModelResponse, writeJsonCache, writeModelLog, writePipelineLog} from '../model-log.js';
-import {BASE_SYSTEM_PROMPT} from '../prompt.js';
+import type {BriefType} from '../app/commands.js';
+import type {GeneratedBrief} from '../domain/briefs.js';
+import {buildBriefFromReasoning, buildFallbackBrief, parseGeneratedBrief} from '../infrastructure/fallback-suggestion.js';
+import {hashParts, readJsonCache, serializeModelResponse, writeJsonCache, writeModelLog, writePipelineLog} from '../infrastructure/model-log.js';
+import {BASE_SYSTEM_PROMPT} from '../domain/prompt.js';
 
 /**
  * @typedef {Object} ProviderConfig

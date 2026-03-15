@@ -1,6 +1,6 @@
 import {readFile} from 'node:fs/promises';
 import ts from 'typescript';
-import {hashParts, readJsonCache, writeJsonCache, writePipelineLog} from '../model-log.js';
+import {hashParts, readJsonCache, writeJsonCache, writePipelineLog} from '../infrastructure/model-log.js';
 
 /** 文件语义快照 */
 export interface FileSemanticSnapshot {

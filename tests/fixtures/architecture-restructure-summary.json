@@ -1,0 +1,461 @@
+{
+  "source": "working-tree",
+  "strategy": "compressed",
+  "nameStatus": "D\tsrc/prompt.ts\nD\tsrc/fallback-suggestion.ts\nD\tsrc/briefs.ts\nD\tsrc/commands.ts\nD\tsrc/loading-state.ts\nD\tsrc/git.ts\nD\tsrc/model-log.ts\nA\tsrc/app/commands.ts\nA\tsrc/app/loading-state.ts\nA\tsrc/application/git-summary.ts\nA\tsrc/domain/briefs.ts\nA\tsrc/domain/prompt.ts\nA\tsrc/infrastructure/fallback-suggestion.ts\nA\tsrc/infrastructure/model-log.ts\nM\tsrc/change-analysis/ir-builder.ts\nM\tsrc/change-analysis/patch-utils.ts\nM\tsrc/change-analysis/types.ts\nM\tsrc/cli.ts\nM\tsrc/providers/openai-compatible.ts\nM\tsrc/providers/zhipu.ts\nA\ttests/patch-utils.test.js\nM\ttests/briefs-ir.test.js\nM\ttests/commands.test.js\nM\ttests/loading-state.test.js",
+  "patch": "-export function buildPrompt() {}\n+export function buildPrompt() {}\n-export function buildFallbackBrief() {}\n+export function buildFallbackBrief() {}\n-export function buildLoadingViewModel() {}\n+export function buildLoadingViewModel() {}\n+export function buildAdaptiveSummary() {}\n+export function detectRelocatedFiles() {}",
+  "fileSummary": "D\tsrc/prompt.ts\thigh-context\nD\tsrc/fallback-suggestion.ts\thigh-context\nD\tsrc/briefs.ts\thigh-context\nD\tsrc/commands.ts\thigh-context\nD\tsrc/loading-state.ts\thigh-context\nA\tsrc/app/commands.ts\thigh-context\nA\tsrc/app/loading-state.ts\thigh-context\nA\tsrc/application/git-summary.ts\thigh-context\nA\tsrc/domain/briefs.ts\thigh-context\nA\tsrc/domain/prompt.ts\thigh-context\nA\tsrc/infrastructure/fallback-suggestion.ts\thigh-context\nM\tsrc/change-analysis/ir-builder.ts\thigh-context\nM\tsrc/cli.ts\thigh-context\nM\tsrc/providers/openai-compatible.ts\tnormal\nM\tsrc/providers/zhipu.ts\tnormal\nM\ttests/briefs-ir.test.js\tnormal",
+  "filesOverview": "D\tsrc/prompt.ts\tscript +0/-818\nD\tsrc/fallback-suggestion.ts\tscript +0/-1379\nD\tsrc/briefs.ts\tscript +0/-252\nD\tsrc/commands.ts\tscript +0/-236\nD\tsrc/loading-state.ts\tscript +0/-249\nD\tsrc/git.ts\tscript +0/-180\nD\tsrc/model-log.ts\tscript +0/-174\nA\tsrc/app/commands.ts\tscript +236/-0\nA\tsrc/app/loading-state.ts\tscript +249/-0\nA\tsrc/application/git-summary.ts\tscript +180/-0\nA\tsrc/domain/briefs.ts\tscript +252/-0\nA\tsrc/domain/prompt.ts\tscript +818/-0\nA\tsrc/infrastructure/fallback-suggestion.ts\tscript +1379/-0\nA\tsrc/infrastructure/model-log.ts\tscript +174/-0\nM\tsrc/change-analysis/ir-builder.ts\tscript +88/-6\nM\tsrc/change-analysis/patch-utils.ts\tscript +102/-4\nM\tsrc/change-analysis/types.ts\ttype +40/-2\nM\tsrc/cli.ts\tscript +30/-16\nM\tsrc/providers/openai-compatible.ts\tscript +8/-4\nM\tsrc/providers/zhipu.ts\tscript +4/-4\nA\ttests/patch-utils.test.js\ttest +18/-0\nM\ttests/briefs-ir.test.js\ttest +146/-10\nM\ttests/commands.test.js\ttest +3/-3\nM\ttests/loading-state.test.js\ttest +3/-3",
+  "groupSummary": "src/app\tcount=2\troles=script\ttotal=485\tfiles=src/app/commands.ts,src/app/loading-state.ts\nsrc/application\tcount=1\troles=script\ttotal=180\tfiles=src/application/git-summary.ts\nsrc/domain\tcount=2\troles=script\ttotal=1070\tfiles=src/domain/briefs.ts,src/domain/prompt.ts\nsrc/infrastructure\tcount=2\troles=script\ttotal=1553\tfiles=src/infrastructure/fallback-suggestion.ts,src/infrastructure/model-log.ts\nsrc/change-analysis\tcount=3\troles=script,type\ttotal=232\tfiles=src/change-analysis/ir-builder.ts,src/change-analysis/patch-utils.ts,src/change-analysis/types.ts\nsrc/providers\tcount=2\troles=script\ttotal=20\tfiles=src/providers/openai-compatible.ts,src/providers/zhipu.ts",
+  "semanticHints": "高影响模块: src/domain/prompt.ts, src/infrastructure/fallback-suggestion.ts, src/application/git-summary.ts\n命令入口与 brief 渲染链路发生调整\n变更分析与摘要压缩链路发生重构\n模型调用、提示词与输出解析链路发生重构\n包含测试覆盖或验证逻辑调整\n包含目录分层与架构重组",
+  "contextSummary": "",
+  "stats": {
+    "fileCount": 24,
+    "ignoredFileCount": 14,
+    "highContextFileCount": 12,
+    "patchChars": 4245
+  },
+  "ir": {
+    "overview": {
+      "source": "working-tree",
+      "filesChanged": 24,
+      "addedLines": 3550,
+      "deletedLines": 3340,
+      "strategy": "compressed",
+      "primaryIntent": "mixed",
+      "hasPureRelocations": false
+    },
+    "changes": [
+      {
+        "file": "src/app/commands.ts",
+        "oldFile": "src/commands.ts",
+        "role": "script",
+        "status": "A",
+        "added": 236,
+        "removed": 0,
+        "total": 236,
+        "symbols": [
+          "resolveCliCommand",
+          "allowsGitExecution",
+          "getBriefOption"
+        ],
+        "exportedSymbols": [
+          "resolveCliCommand",
+          "allowsGitExecution",
+          "getBriefOption"
+        ],
+        "dependencyChanges": [],
+        "changeKinds": [
+          "relocation",
+          "structure",
+          "contract"
+        ],
+        "evidence": {
+          "hasCodeLogicChange": false,
+          "hasExportShapeChange": false,
+          "hasDependencyChange": false,
+          "hasPathOnlyMove": true
+        },
+        "summary": "relocated file into a new module boundary from src/commands.ts to src/app/commands.ts"
+      },
+      {
+        "file": "src/app/loading-state.ts",
+        "oldFile": "src/loading-state.ts",
+        "role": "script",
+        "status": "A",
+        "added": 249,
+        "removed": 0,
+        "total": 249,
+        "symbols": [
+          "buildLoadingViewModel",
+          "buildExecutionViewModel",
+          "PhaseName"
+        ],
+        "exportedSymbols": [
+          "buildLoadingViewModel",
+          "buildExecutionViewModel",
+          "PhaseName"
+        ],
+        "dependencyChanges": [],
+        "changeKinds": [
+          "relocation",
+          "structure"
+        ],
+        "evidence": {
+          "hasCodeLogicChange": false,
+          "hasExportShapeChange": false,
+          "hasDependencyChange": false,
+          "hasPathOnlyMove": true
+        },
+        "summary": "relocated file into a new module boundary from src/loading-state.ts to src/app/loading-state.ts"
+      },
+      {
+        "file": "src/application/git-summary.ts",
+        "oldFile": "src/git.ts",
+        "role": "script",
+        "status": "A",
+        "added": 180,
+        "removed": 0,
+        "total": 180,
+        "symbols": [
+          "buildAdaptiveSummary",
+          "decideStrategy",
+          "collectWorkspaceSnapshot"
+        ],
+        "exportedSymbols": [
+          "buildAdaptiveSummary",
+          "decideStrategy"
+        ],
+        "dependencyChanges": [
+          "../change-analysis/ir-builder.js",
+          "../change-analysis/context-extractor.js",
+          "../change-analysis/file-classifier.js",
+          "../change-analysis/patch-utils.js"
+        ],
+        "changeKinds": [
+          "relocation",
+          "structure",
+          "contract"
+        ],
+        "evidence": {
+          "hasCodeLogicChange": false,
+          "hasExportShapeChange": false,
+          "hasDependencyChange": true,
+          "hasPathOnlyMove": true
+        },
+        "summary": "relocated file into a new module boundary from src/git.ts to src/application/git-summary.ts"
+      },
+      {
+        "file": "src/domain/briefs.ts",
+        "oldFile": "src/briefs.ts",
+        "role": "script",
+        "status": "A",
+        "added": 252,
+        "removed": 0,
+        "total": 252,
+        "symbols": [
+          "BriefType",
+          "ChangeSource",
+          "SummaryStrategy"
+        ],
+        "exportedSymbols": [
+          "BriefType",
+          "ChangeSource",
+          "SummaryStrategy"
+        ],
+        "dependencyChanges": [],
+        "changeKinds": [
+          "relocation",
+          "structure",
+          "contract"
+        ],
+        "evidence": {
+          "hasCodeLogicChange": false,
+          "hasExportShapeChange": false,
+          "hasDependencyChange": false,
+          "hasPathOnlyMove": true
+        },
+        "summary": "relocated file into a new module boundary from src/briefs.ts to src/domain/briefs.ts"
+      },
+      {
+        "file": "src/domain/prompt.ts",
+        "oldFile": "src/prompt.ts",
+        "role": "script",
+        "status": "A",
+        "added": 818,
+        "removed": 0,
+        "total": 818,
+        "symbols": [
+          "buildPrompt",
+          "buildZhipuPrompt",
+          "buildNarrativeHint"
+        ],
+        "exportedSymbols": [
+          "buildPrompt",
+          "buildZhipuPrompt"
+        ],
+        "dependencyChanges": [
+          "../change-analysis/types.js",
+          "./briefs.js"
+        ],
+        "changeKinds": [
+          "relocation",
+          "structure",
+          "contract"
+        ],
+        "evidence": {
+          "hasCodeLogicChange": false,
+          "hasExportShapeChange": false,
+          "hasDependencyChange": true,
+          "hasPathOnlyMove": true
+        },
+        "summary": "relocated file into a new module boundary from src/prompt.ts to src/domain/prompt.ts"
+      },
+      {
+        "file": "src/infrastructure/fallback-suggestion.ts",
+        "oldFile": "src/fallback-suggestion.ts",
+        "role": "script",
+        "status": "A",
+        "added": 1379,
+        "removed": 0,
+        "total": 1379,
+        "symbols": [
+          "buildFallbackBrief",
+          "parseGeneratedBrief",
+          "buildFallbackReviewerFocus"
+        ],
+        "exportedSymbols": [
+          "buildFallbackBrief",
+          "parseGeneratedBrief"
+        ],
+        "dependencyChanges": [
+          "../domain/briefs.js"
+        ],
+        "changeKinds": [
+          "relocation",
+          "structure",
+          "contract"
+        ],
+        "evidence": {
+          "hasCodeLogicChange": false,
+          "hasExportShapeChange": false,
+          "hasDependencyChange": true,
+          "hasPathOnlyMove": true
+        },
+        "summary": "relocated file into a new module boundary from src/fallback-suggestion.ts to src/infrastructure/fallback-suggestion.ts"
+      },
+      {
+        "file": "src/change-analysis/ir-builder.ts",
+        "role": "script",
+        "status": "M",
+        "added": 88,
+        "removed": 6,
+        "total": 94,
+        "symbols": [
+          "buildChangeIR",
+          "inferChangeKinds",
+          "inferPrimaryIntent"
+        ],
+        "exportedSymbols": [
+          "buildChangeIR"
+        ],
+        "dependencyChanges": [
+          "./patch-utils.js"
+        ],
+        "changeKinds": [
+          "behavior",
+          "contract",
+          "structure"
+        ],
+        "evidence": {
+          "hasCodeLogicChange": true,
+          "hasExportShapeChange": true,
+          "hasDependencyChange": true,
+          "hasPathOnlyMove": false
+        },
+        "summary": "updated script file around buildChangeIR, inferChangeKinds, inferPrimaryIntent with dependency changes: ./patch-utils.js"
+      },
+      {
+        "file": "src/change-analysis/patch-utils.ts",
+        "role": "script",
+        "status": "M",
+        "added": 102,
+        "removed": 4,
+        "total": 106,
+        "symbols": [
+          "detectRelocatedFiles",
+          "optimizeRenameOnlyPatches"
+        ],
+        "exportedSymbols": [
+          "detectRelocatedFiles",
+          "optimizeRenameOnlyPatches"
+        ],
+        "dependencyChanges": [],
+        "changeKinds": [
+          "behavior",
+          "contract"
+        ],
+        "evidence": {
+          "hasCodeLogicChange": true,
+          "hasExportShapeChange": true,
+          "hasDependencyChange": false,
+          "hasPathOnlyMove": false
+        },
+        "summary": "updated script file around detectRelocatedFiles, optimizeRenameOnlyPatches"
+      },
+      {
+        "file": "src/change-analysis/types.ts",
+        "role": "type",
+        "status": "M",
+        "added": 40,
+        "removed": 2,
+        "total": 42,
+        "symbols": [
+          "ChangeKind",
+          "ChangeIRFile",
+          "ChangeIR"
+        ],
+        "exportedSymbols": [
+          "ChangeKind",
+          "ChangeIRFile",
+          "ChangeIR"
+        ],
+        "dependencyChanges": [],
+        "changeKinds": [
+          "contract"
+        ],
+        "evidence": {
+          "hasCodeLogicChange": false,
+          "hasExportShapeChange": true,
+          "hasDependencyChange": false,
+          "hasPathOnlyMove": false
+        },
+        "summary": "updated type file around ChangeKind, ChangeIRFile, ChangeIR"
+      },
+      {
+        "file": "src/cli.ts",
+        "role": "script",
+        "status": "M",
+        "added": 30,
+        "removed": 16,
+        "total": 46,
+        "symbols": [
+          "buildPromptForProvider",
+          "App"
+        ],
+        "exportedSymbols": [],
+        "dependencyChanges": [
+          "./app/commands.js",
+          "./domain/briefs.js",
+          "./domain/prompt.js",
+          "./application/git-summary.js",
+          "./infrastructure/fallback-suggestion.js"
+        ],
+        "changeKinds": [
+          "structure",
+          "contract"
+        ],
+        "evidence": {
+          "hasCodeLogicChange": false,
+          "hasExportShapeChange": false,
+          "hasDependencyChange": true,
+          "hasPathOnlyMove": false
+        },
+        "summary": "updated script file around buildPromptForProvider, App with dependency changes: ./app/commands.js, ./domain/briefs.js, ./domain/prompt.js, ./application/git-summary.js, ./infrastructure/fallback-suggestion.js"
+      },
+      {
+        "file": "src/providers/openai-compatible.ts",
+        "role": "script",
+        "status": "M",
+        "added": 8,
+        "removed": 4,
+        "total": 12,
+        "symbols": [
+          "createOpenAICompatibleConfig",
+          "GenerationResult"
+        ],
+        "exportedSymbols": [
+          "createOpenAICompatibleConfig",
+          "GenerationResult"
+        ],
+        "dependencyChanges": [
+          "../domain/prompt.js",
+          "../infrastructure/fallback-suggestion.js"
+        ],
+        "changeKinds": [
+          "structure",
+          "contract"
+        ],
+        "evidence": {
+          "hasCodeLogicChange": false,
+          "hasExportShapeChange": true,
+          "hasDependencyChange": true,
+          "hasPathOnlyMove": false
+        },
+        "summary": "updated script file around createOpenAICompatibleConfig, GenerationResult with dependency changes: ../domain/prompt.js, ../infrastructure/fallback-suggestion.js"
+      },
+      {
+        "file": "src/providers/zhipu.ts",
+        "role": "script",
+        "status": "M",
+        "added": 4,
+        "removed": 4,
+        "total": 8,
+        "symbols": [
+          "generateSuggestion"
+        ],
+        "exportedSymbols": [
+          "generateSuggestion"
+        ],
+        "dependencyChanges": [
+          "../domain/prompt.js",
+          "../infrastructure/fallback-suggestion.js"
+        ],
+        "changeKinds": [
+          "structure"
+        ],
+        "evidence": {
+          "hasCodeLogicChange": false,
+          "hasExportShapeChange": false,
+          "hasDependencyChange": true,
+          "hasPathOnlyMove": false
+        },
+        "summary": "updated script file around generateSuggestion with dependency changes: ../domain/prompt.js, ../infrastructure/fallback-suggestion.js"
+      },
+      {
+        "file": "tests/briefs-ir.test.js",
+        "role": "test",
+        "status": "M",
+        "added": 146,
+        "removed": 10,
+        "total": 156,
+        "symbols": [],
+        "exportedSymbols": [],
+        "dependencyChanges": [],
+        "changeKinds": [
+          "test"
+        ],
+        "evidence": {
+          "hasCodeLogicChange": false,
+          "hasExportShapeChange": false,
+          "hasDependencyChange": false,
+          "hasPathOnlyMove": false
+        },
+        "summary": "updated test file"
+      },
+      {
+        "file": "tests/loading-state.test.js",
+        "role": "test",
+        "status": "M",
+        "added": 3,
+        "removed": 3,
+        "total": 6,
+        "symbols": [],
+        "exportedSymbols": [],
+        "dependencyChanges": [
+          "../dist/app/loading-state.js"
+        ],
+        "changeKinds": [
+          "test"
+        ],
+        "evidence": {
+          "hasCodeLogicChange": false,
+          "hasExportShapeChange": false,
+          "hasDependencyChange": true,
+          "hasPathOnlyMove": false
+        },
+        "summary": "updated test file with dependency changes: ../dist/app/loading-state.js"
+      }
+    ],
+    "tests": [
+      "tests/patch-utils.test.js",
+      "tests/briefs-ir.test.js",
+      "tests/commands.test.js",
+      "tests/loading-state.test.js"
+    ],
+    "risks": [
+      "Configuration or dependency related changes may affect runtime behavior.",
+      "Type or contract changes should be reviewed for compatibility impact.",
+      "Large file-level changes may hide behavior regressions across multiple code paths."
+    ]
+  }
+}

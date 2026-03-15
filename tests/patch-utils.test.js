@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildPatchLineStats,
+  detectRelocatedFiles,
   formatNameStatusLine,
   mergeNameStatusOutputs,
   optimizeRenameOnlyPatches,
@@ -57,4 +58,40 @@ test('optimizeRenameOnlyPatches compresses pure rename patches', () => {
   ]);
 
   assert.match(optimized[0].content, /rename only: old\.ts -> new\.ts/);
+});
+
+test('detectRelocatedFiles matches add/delete pairs with identical patch bodies', () => {
+  const detection = detectRelocatedFiles(
+    [
+      {status: 'D', path: 'src/old/loading-state.ts'},
+      {status: 'A', path: 'src/app/loading-state.ts'}
+    ],
+    [
+      {
+        path: 'src/old/loading-state.ts',
+        content: [
+          'diff --git a/src/old/loading-state.ts b/src/old/loading-state.ts',
+          '--- a/src/old/loading-state.ts',
+          '+++ /dev/null',
+          '@@ -1,2 +0,0 @@',
+          '-export function buildLoadingViewModel() {}',
+          '-export function buildExecutionViewModel() {}'
+        ].join('\n')
+      },
+      {
+        path: 'src/app/loading-state.ts',
+        content: [
+          'diff --git a/src/app/loading-state.ts b/src/app/loading-state.ts',
+          '--- /dev/null',
+          '+++ b/src/app/loading-state.ts',
+          '@@ -0,0 +1,2 @@',
+          '+export function buildLoadingViewModel() {}',
+          '+export function buildExecutionViewModel() {}'
+        ].join('\n')
+      }
+    ]
+  );
+
+  assert.equal(detection.movedFromByFile.get('src/app/loading-state.ts'), 'src/old/loading-state.ts');
+  assert.equal(detection.pureRelocationFiles.has('src/app/loading-state.ts'), true);
 });

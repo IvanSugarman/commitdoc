@@ -5,4 +5,4 @@ export {
   getProviderDefaults,
   getProviderName,
   getResolvedProviderConfig,
-} from "./providers/index.js";
+} from "../providers/index.js";

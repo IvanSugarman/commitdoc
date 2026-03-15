@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
-import { hashParts, readJsonCache, writeJsonCache, writePipelineLog } from '../model-log.js';
+import { hashParts, readJsonCache, writeJsonCache, writePipelineLog } from '../infrastructure/model-log.js';
 /**
  * @description 分析单个 TS/JS 文件的符号信息。
  * @param {string} filePath 文件路径。
