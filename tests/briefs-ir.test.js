@@ -418,3 +418,110 @@ test('buildFallbackBrief follows expansive output profile for larger changes', (
   assert.match(crBrief.changePurpose, /职责分散问题|统一/);
   assert.match(crBrief.reviewerFocus, /BriefType|provider|回退逻辑/);
 });
+
+test('buildPrompt prioritizes user-visible interaction changes', () => {
+  const summary = {
+    source: 'working-tree',
+    strategy: 'compressed',
+    nameStatus: ['M\tsrc/cli.ts', 'A\tsrc/loading-state.ts', 'A\ttests/loading-state.test.js'].join('\n'),
+    patch: ['+export function buildLoadingViewModel() {}', '+export function buildExecutionViewModel() {}'].join('\n'),
+    fileSummary: ['M\tsrc/cli.ts\thigh-context', 'A\tsrc/loading-state.ts\thigh-context', 'A\ttests/loading-state.test.js\tnormal'].join('\n'),
+    filesOverview: ['M\tsrc/cli.ts\tscript +40/-8', 'A\tsrc/loading-state.ts\tscript +120/-0', 'A\ttests/loading-state.test.js\ttest +28/-0'].join('\n'),
+    groupSummary: ['src/cli\tcount=1\troles=script\ttotal=48', 'src/loading-state\tcount=1\troles=script\ttotal=120'].join('\n'),
+    semanticHints: ['用户可感知交互与反馈发生调整', '包含测试覆盖或验证逻辑调整'].join('\n'),
+    contextSummary: '',
+    stats: {
+      fileCount: 3,
+      ignoredFileCount: 0,
+      highContextFileCount: 2,
+      patchChars: 96
+    },
+    ir: {
+      overview: {
+        source: 'working-tree',
+        filesChanged: 3,
+        addedLines: 168,
+        deletedLines: 8,
+        strategy: 'compressed'
+      },
+      changes: [
+        {
+          file: 'src/loading-state.ts',
+          role: 'script',
+          status: 'A',
+          added: 120,
+          removed: 0,
+          total: 120,
+          symbols: ['buildLoadingViewModel', 'buildExecutionViewModel'],
+          dependencyChanges: [],
+          summary: 'added script file around buildLoadingViewModel, buildExecutionViewModel'
+        },
+        {
+          file: 'src/cli.ts',
+          role: 'script',
+          status: 'M',
+          added: 40,
+          removed: 8,
+          total: 48,
+          symbols: ['App'],
+          dependencyChanges: ['./loading-state.js'],
+          summary: 'updated script file around App with dependency changes: ./loading-state.js'
+        },
+        {
+          file: 'tests/loading-state.test.js',
+          role: 'test',
+          status: 'A',
+          added: 28,
+          removed: 0,
+          total: 28,
+          symbols: [],
+          dependencyChanges: [],
+          summary: 'added test file'
+        }
+      ],
+      tests: ['tests/loading-state.test.js'],
+      risks: []
+    }
+  };
+
+  const prompt = buildPrompt(summary, 'cr-description');
+  assert.match(prompt, /\[THEME_CHECKLIST\]\n用户可感知交互与反馈/);
+  assert.doesNotMatch(prompt, /\[THEME_CHECKLIST\][\s\S]*命令入口与 brief 契约/);
+  assert.match(prompt, /\[USER_VISIBLE_SURFACES\]/);
+  assert.match(prompt, /等待阶段的反馈节奏与进度表达/);
+  assert.match(prompt, /等待态、状态变化和执行回执是否准确反映真实行为/);
+});
+
+test('buildFallbackBrief uses generic reviewer focus for user-visible interaction changes', () => {
+  const prompt = [
+    '[THEME_CHECKLIST]',
+    '用户可感知交互与反馈',
+    '测试与工程校验',
+    '',
+    '[ACTION_CHECKLIST]',
+    '统一用户可感知的交互反馈，收敛等待态、状态展示或执行回执的表达方式',
+    '调整状态推进与反馈节奏，让实际行为变化在交互层更容易被理解和验证',
+    '',
+    '[USER_VISIBLE_SURFACES]',
+    '等待阶段的反馈节奏与进度表达',
+    '状态变化与执行回执的可见性',
+    '关键操作过程中的交互反馈',
+    '',
+    '[FILE_SUMMARY]',
+    'M\tsrc/cli.ts\thigh-context',
+    'A\tsrc/loading-state.ts\thigh-context',
+    '',
+    '[IR_CHANGES]',
+    'src/loading-state.ts\trole=script\tstatus=A\t+120/-0\tsummary=added script file around buildLoadingViewModel',
+    'src/cli.ts\trole=script\tstatus=M\t+40/-8\tsummary=updated script file around App with dependency changes: ./loading-state.js',
+    '',
+    '[PATCH]',
+    '+export function buildLoadingViewModel() {}',
+    '+export function buildExecutionViewModel() {}'
+  ].join('\n');
+
+  const crBrief = buildFallbackBrief(prompt, '', 'cr-description');
+  assert.equal(crBrief.briefType, 'cr-description');
+  assert.match(crBrief.changePurpose, /用户可见层面更清晰、更一致/);
+  assert.match(crBrief.reviewerFocus, /等待阶段的反馈节奏与进度表达|状态变化与执行回执的可见性/);
+});

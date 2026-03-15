@@ -77,6 +77,7 @@ export function buildPrompt(input, briefType) {
         "将 [NARRATIVE_HINT] 视为本次改动的高层叙事锚点，先回答为什么做这次改动，再展开关键变化与影响。",
         "将 [ACTION_CHECKLIST] 视为推荐的工程动作表达，优先总结统一协议、拆分职责、增强可观测性、自适应策略、测试校验等动作，而不是按文件逐项列举。",
         "将 [REVIEWER_FOCUS_TEMPLATE] 视为评审关注点模板，优先沿着契约传播、回退逻辑、provider 兼容、行为一致性这些高风险点来写。",
+        "如果存在 [USER_VISIBLE_SURFACES]，优先用它描述用户可感知的交互变化与影响范围，而不是回退成文件清单。",
         "在 IR 仍需补充文件级证据时，再参考 [FILES_OVERVIEW]。",
         "当 [SEMANTIC_HINTS] 与路径和补丁内容一致时，应将其视为高优先级上下文。",
         "将 [GROUP_SUMMARY] 视为本次改动的结构地图，避免只盯某一个文件。",
@@ -110,6 +111,7 @@ export function buildPrompt(input, briefType) {
         `[NARRATIVE_HINT]\n${buildNarrativeHint(input, outputProfile)}`,
         `[ACTION_CHECKLIST]\n${buildActionChecklist(input)}`,
         `[REVIEWER_FOCUS_TEMPLATE]\n${buildReviewerFocusTemplate(input)}`,
+        `[USER_VISIBLE_SURFACES]\n${buildUserVisibleSurfaces(input)}`,
         `[IR_CHANGES]\n${buildIRChanges(input)}`,
         `[MODULE_CLUSTERS]\n${buildModuleClusters(input)}`,
         `[THEME_CHECKLIST]\n${buildThemeChecklist(input)}`,
@@ -178,6 +180,7 @@ export function buildZhipuPrompt(input, briefType) {
         "优先提炼一个模块级或业务级语义中心。",
         "先根据 [NARRATIVE_HINT] 给出高层目标，再展开关键变化。",
         "优先参考 [ACTION_CHECKLIST]，把输出写成工程动作，而不是模块清单。",
+        "如果存在 [USER_VISIBLE_SURFACES]，优先据此描述用户可感知的交互变化和影响面。",
         "优先按语义簇总结，例如脚本、文档、请求文件、命令或架构调整。",
         "如果存在多个高影响改动簇，必须覆盖 3 到 4 个簇，不要只保留一个配套改动。",
         "优先覆盖 [THEME_CHECKLIST] 中列出的主题，尤其是命令/brief、分析链路、provider/prompt、缓存/日志、测试/文档等真实存在的主题。",
@@ -197,6 +200,7 @@ export function buildZhipuPrompt(input, briefType) {
         `[NARRATIVE_HINT]\n${buildNarrativeHint(input, outputProfile)}`,
         `[ACTION_CHECKLIST]\n${buildActionChecklist(input)}`,
         `[REVIEWER_FOCUS_TEMPLATE]\n${buildReviewerFocusTemplate(input)}`,
+        `[USER_VISIBLE_SURFACES]\n${buildUserVisibleSurfaces(input)}`,
         `[IR_CHANGES]\n${pickLines(buildIRChanges(input), 12)}`,
         `[MODULE_CLUSTERS]\n${buildModuleClusters(input)}`,
         `[THEME_CHECKLIST]\n${buildThemeChecklist(input)}`,
@@ -246,6 +250,7 @@ function buildBriefRules(briefType, outputProfile) {
             `每条 bullet 应尽量覆盖一个不同的高影响主题，并遵循 [OUTPUT_PROFILE]；当前建议是 ${outputProfile.coverageHint}。`,
             "第一条 bullet 优先概括本次改动的总体目标或重构方向，而不是直接列模块名。",
             "bullets 优先写成工程动作，例如统一协议、拆分职责、增强可观测性、引入自适应策略、补齐测试校验，而不是“新增 xxx.ts 模块”。",
+            "如果 [THEME_CHECKLIST] 包含用户可感知交互与反馈，优先描述交互反馈、等待体验、状态变化或执行回执等用户可感知变化，不要先写抽类型、拆文件或补测试。",
             "如果本次改动明显跨越多个模块簇，宁可输出更多条目，也不要为了套模板压缩成 3 到 4 条。"
         ];
     }
@@ -261,6 +266,7 @@ function buildBriefRules(briefType, outputProfile) {
         "changePurpose 应概括这次重构或变更的总体目标，而不是只描述单个子模块。",
         "keyChanges 优先写成工程动作，不要让每一条都以文件名或模块名开头。",
         "impactScope 优先描述受影响的系统层、运行时行为或协作边界，不要简单重复文件清单。",
+        "如果 [THEME_CHECKLIST] 包含用户可感知交互与反馈，keyChanges 和 impactScope 应优先描述交互反馈、等待体验、状态变化或执行回执等用户可感知变化。",
         "reviewerFocus 必须优先遵循 [REVIEWER_FOCUS_TEMPLATE]，只允许在不改变风险类别的前提下做轻微措辞调整。",
         `keyChanges 和 impactScope 应尽量覆盖不同的高影响主题，并遵循 [OUTPUT_PROFILE]；当前建议是 ${outputProfile.coverageHint}。`
     ];
@@ -347,12 +353,16 @@ function formatOutputProfile(profile) {
 function buildNarrativeHint(input, profile) {
     const themes = getThemeChecklistItems(input);
     const groups = new Set(sortChangesForPrompt(input).map((item) => getClusterKey(item.file)));
-    const hasCommand = groups.has("src/briefs") || groups.has("src/commands") || groups.has("src/cli");
+    const hasCommand = hasCommandContractChanges(input);
     const hasAnalysis = groups.has("src/git") || groups.has("src/change-analysis");
     const hasModel = groups.has("src/providers") || groups.has("src/prompt") || groups.has("src/fallback-suggestion");
     const hasLog = groups.has("src/model-log");
     const hasTests = input.ir.tests.length > 0;
+    const hasUserVisibleInteraction = hasUserVisibleInteractionChanges(input);
     const topThemes = themes.slice(0, 4).join("、");
+    if (hasUserVisibleInteraction && !hasAnalysis && !hasModel) {
+        return "这次改动主要围绕用户可感知的交互反馈展开，目标是统一等待、状态变化或执行回执的表达方式，并让实际行为变化更容易被感知和验证。";
+    }
     if (profile.scale === "expansive" && hasCommand && hasAnalysis && hasModel) {
         const suffix = hasLog
             ? "并补齐缓存与诊断能力"
@@ -375,6 +385,10 @@ function buildActionChecklist(input) {
     const themes = getThemeChecklistItems(input);
     const semanticHints = input.semanticHints || "";
     const actions = [];
+    if (themes.includes("用户可感知交互与反馈")) {
+        actions.push("统一用户可感知的交互反馈，收敛等待态、状态展示或执行回执的表达方式");
+        actions.push("调整状态推进与反馈节奏，让实际行为变化在交互层更容易被理解和验证");
+    }
     if (themes.includes("命令入口与 brief 契约") || /命令入口|brief 契约/i.test(semanticHints)) {
         actions.push("统一命令入口与 Brief 契约，收敛 CLI 参数和内部输出协议");
     }
@@ -404,6 +418,11 @@ function buildReviewerFocusTemplate(input) {
     const themes = getThemeChecklistItems(input);
     const semanticHints = input.semanticHints || "";
     const checks = [];
+    if (themes.includes("用户可感知交互与反馈")) {
+        checks.push("等待态、状态变化和执行回执是否准确反映真实行为");
+        checks.push("不同阶段的交互反馈表达是否保持一致且不误导");
+        checks.push("用户可见的节奏变化是否与真实耗时和状态推进相匹配");
+    }
     if (themes.includes("命令入口与 brief 契约") || /命令入口|brief 契约/i.test(semanticHints)) {
         checks.push("BriefType 与命令解析结果在 CLI、渲染和 provider 间是否完整透传");
     }
@@ -424,6 +443,37 @@ function buildReviewerFocusTemplate(input) {
         return "重点检查接口契约传播、回退逻辑和行为一致性。";
     }
     return `重点检查 ${selected.join('；')}。`;
+}
+/**
+ * @description 构建用户可感知影响面，帮助模型避免把交互改动写成文件清单。
+ * @param {PromptInput} input 摘要输入。
+ * @return {string} 用户可感知影响面。
+ */
+function buildUserVisibleSurfaces(input) {
+    if (!hasUserVisibleInteractionChanges(input)) {
+        return "";
+    }
+    const evidence = [
+        input.semanticHints || "",
+        input.filesOverview || "",
+        input.fileSummary || "",
+        input.groupSummary || "",
+        input.ir.changes.map((item) => `${item.file}\t${item.summary}`).join("\n"),
+    ].join("\n");
+    const surfaces = [];
+    if (/(loading|progress|waiting|spinner|duration|latency|slow|等待|加载|进度条)/i.test(evidence)) {
+        surfaces.push("等待阶段的反馈节奏与进度表达");
+    }
+    if (/(status|state|idle|running|success|error|pending|状态|执行进度|回执)/i.test(evidence)) {
+        surfaces.push("状态变化与执行回执的可见性");
+    }
+    if (/(panel|view|render|ui|ink|layout|visual|display|界面|面板|展示|视觉)/i.test(evidence)) {
+        surfaces.push("用户可见反馈的展示结构与一致性");
+    }
+    if (/(confirm|submit|commit|push|action|interaction|交互|提交流程|操作反馈)/i.test(evidence)) {
+        surfaces.push("关键操作过程中的交互反馈");
+    }
+    return Array.from(new Set(surfaces)).join("\n");
 }
 /**
  * @description 构建 IR 概览文本。
@@ -513,7 +563,10 @@ function buildThemeChecklist(input) {
 function getThemeChecklistItems(input) {
     const groups = new Set(sortChangesForPrompt(input).map((item) => getClusterKey(item.file)));
     const themes = [];
-    if (groups.has("src/briefs") || groups.has("src/commands") || groups.has("src/cli")) {
+    if (hasUserVisibleInteractionChanges(input)) {
+        themes.push("用户可感知交互与反馈");
+    }
+    if (hasCommandContractChanges(input)) {
         themes.push("命令入口与 brief 契约");
     }
     if (groups.has("src/git") || groups.has("src/change-analysis")) {
@@ -573,7 +626,7 @@ function scoreChange(item) {
         doc: 36,
         other: 24
     };
-    const pathScore = /(src\/(cli|commands|briefs|git|prompt|fallback-suggestion|model-log))/i.test(item.file) ? 70 :
+    const pathScore = /(src\/(cli|commands|briefs|git|prompt|fallback-suggestion|model-log|loading-state))/i.test(item.file) ? 70 :
         /(src\/providers\/)/i.test(item.file) ? 66 :
             /(src\/change-analysis\/)/i.test(item.file) ? 64 :
                 /(package\.json|README\.md)$/i.test(item.file) ? 28 :
@@ -599,4 +652,39 @@ function getClusterKey(filePath) {
         return parts.slice(0, 2).join("/");
     }
     return parts.slice(0, 2).join("/");
+}
+/**
+ * @description 判断当前改动是否更偏向用户可感知交互与反馈。
+ * @param {PromptInput} input 摘要输入。
+ * @return {boolean} 是否命中用户可见交互主题。
+ */
+function hasUserVisibleInteractionChanges(input) {
+    const groups = new Set(sortChangesForPrompt(input).map((item) => getClusterKey(item.file)));
+    const evidence = [
+        input.semanticHints || "",
+        input.filesOverview || "",
+        input.fileSummary || "",
+        input.groupSummary || "",
+        input.ir.changes.map((item) => `${item.file}\t${item.summary}`).join("\n"),
+    ].join("\n");
+    return (groups.has("src/loading-state") ||
+        /(loading-state|LoadingViewModel|progress|spinner|loading|ui|view|panel|feedback|status|render|交互|加载态|进度条|视觉|反馈|执行进度|状态变化)/i.test(evidence));
+}
+/**
+ * @description 判断当前改动是否涉及命令入口与 brief 契约。
+ * @param {PromptInput} input 摘要输入。
+ * @return {boolean} 是否命中命令契约主题。
+ */
+function hasCommandContractChanges(input) {
+    const groups = new Set(sortChangesForPrompt(input).map((item) => getClusterKey(item.file)));
+    const evidence = [
+        input.semanticHints || "",
+        input.filesOverview || "",
+        input.fileSummary || "",
+        input.groupSummary || "",
+        input.ir.changes.map((item) => `${item.file}\t${item.summary}`).join("\n"),
+    ].join("\n");
+    return (groups.has("src/commands") ||
+        groups.has("src/briefs") ||
+        /(BriefType|resolveCliCommand|getBriefOption|命令入口|brief 契约)/i.test(evidence));
 }

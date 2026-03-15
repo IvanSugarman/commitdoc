@@ -13,6 +13,7 @@ import {getCommitPayload, normalizeCrDescriptionBrief, renderBrief, type Rendere
 import {allowsGitExecution, formatHelpText, getBriefOptions, getBriefOption, resolveCliCommand, type BriefType} from './commands.js';
 import {ACTIVE_ENV_PATH, ENV_DIR, PROJECT_ROOT} from './env.js';
 import {applyCommitAndPush, getChangesForSummary, isGitRepo} from './git.js';
+import {buildExecutionViewModel, buildLoadingViewModel, getPhaseLabel, type PhaseName} from './loading-state.js';
 import {writePipelineLog} from './model-log.js';
 import {generateSuggestion, getProviderDefaults, getProviderName, getResolvedProviderConfig} from './openai.js';
 import {buildPrompt, buildZhipuPrompt} from './prompt.js';
@@ -56,6 +57,10 @@ const DEFAULT_ENV = {
 
 type EnvConfig = Record<string, string>;
 type GaiEnvConfig = typeof DEFAULT_ENV;
+type StepState = {
+  name: 'add' | 'commit' | 'push';
+  status: import('./loading-state.js').ExecutionStepStatus;
+};
 
 /**
  * @typedef {Object} SuggestionViewModel
@@ -66,7 +71,7 @@ type GaiEnvConfig = typeof DEFAULT_ENV;
 /**
  * @typedef {Object} StepState
  * @property {'add'|'commit'|'push'} name 步骤名称。
- * @property {'idle'|'running'|'success'} status 步骤状态。
+ * @property {import('./loading-state.js').ExecutionStepStatus} status 步骤状态。
  */
 
 /**
@@ -92,10 +97,6 @@ type GaiEnvConfig = typeof DEFAULT_ENV;
  * @property {number} estimatedInputTokens 估算输入 token 数。
  * @property {string} provider Provider 展示名称。
  * @property {string[]} notes 说明列表。
- */
-
-/**
- * @typedef {'git'|'prompt'|'model'} PhaseName
  */
 
 /**
@@ -606,49 +607,12 @@ function getGenerationModeLabel(mode) {
 }
 
 /**
- * @description 获取阶段中文名称。
- * @param {PhaseName} phase 阶段名称。
- * @return {string} 展示文案。
- */
-function getPhaseLabel(phase) {
-  if (phase === 'git') return 'Git 提取';
-  if (phase === 'prompt') return 'Prompt 构建';
-  return '模型生成';
-}
-
-/**
  * @description 计算阶段总耗时。
  * @param {PhaseTiming[]} timings 阶段耗时列表。
  * @return {number} 总耗时。
  */
 function getTotalPhaseDuration(timings) {
   return timings.reduce((total, item) => total + item.durationMs, 0);
-}
-
-/**
- * @description 根据阶段返回动态加载文案。
- * @param {PhaseName | null} phase 当前阶段。
- * @param {number} frameIndex 动画帧索引。
- * @return {string} 加载提示文案。
- */
-function getLoadingMessage(phase, frameIndex) {
-  /** @type {string[]} */
-  const frames = ['.', '..', '...'];
-  const suffix = frames[frameIndex % frames.length];
-
-  if (phase === 'git') {
-    return `正在扫描 Git 变更${suffix}`;
-  }
-
-  if (phase === 'prompt') {
-    return `正在整理变更语义${suffix}`;
-  }
-
-  if (phase === 'model') {
-    return `正在生成提交建议${suffix}`;
-  }
-
-  return `正在处理${suffix}`;
 }
 
 function TokenDoctorApp() {
@@ -776,7 +740,7 @@ function getStepIcon(status) {
   return '[ ]';
 }
 
-function createInitialSteps() {
+function createInitialSteps(): StepState[] {
   return [
     {name: 'add', status: 'idle'},
     {name: 'commit', status: 'idle'},
@@ -796,18 +760,25 @@ function App(props: {initialBriefType?: BriefType}) {
   const [summarySource, setSummarySource] = useState(null);
   const [summaryStrategy, setSummaryStrategy] = useState(null);
   const [generationMode, setGenerationMode] = useState(/** @type {GenerationMode | null} */ (null));
-  const [steps, setSteps] = useState(createInitialSteps);
+  const [steps, setSteps] = useState<StepState[]>(createInitialSteps);
   const [phaseTimings, setPhaseTimings] = useState(/** @type {PhaseTiming[]} */ ([]));
   const [currentPhase, setCurrentPhase] = useState(/** @type {PhaseName | null} */ (null));
   const [loadingFrame, setLoadingFrame] = useState(0);
+  const [loadingStartedAt, setLoadingStartedAt] = useState<number | null>(null);
+  const [loadingElapsedMs, setLoadingElapsedMs] = useState(0);
+  const [submittingStartedAt, setSubmittingStartedAt] = useState<number | null>(null);
+  const [submittingElapsedMs, setSubmittingElapsedMs] = useState(0);
 
   const runGenerate = useCallback(async (briefType: BriefType, options: {bypassBriefCache?: boolean} = {}) => {
+    const loadingStartAt = performance.now();
     setLoading(true);
     setError(null);
     setSteps(createInitialSteps());
     setPhaseTimings([]);
     setGenerationMode(null);
     setCurrentPhase('git');
+    setLoadingStartedAt(loadingStartAt);
+    setLoadingElapsedMs(0);
     setSelectedBriefType(briefType);
 
     try {
@@ -906,27 +877,41 @@ function App(props: {initialBriefType?: BriefType}) {
   }, [props.initialBriefType, runGenerate]);
 
   useEffect(() => {
-    if (!loading) {
+    const activeStartedAt = loading ? loadingStartedAt : submitting ? submittingStartedAt : null;
+
+    if ((!loading && !submitting) || activeStartedAt === null) {
       setLoadingFrame(0);
+      setLoadingElapsedMs(0);
+      setSubmittingElapsedMs(0);
       return;
     }
 
     const timer = setInterval(() => {
-      setLoadingFrame((current) => (current + 1) % 3);
-    }, 300);
+      setLoadingFrame((current) => current + 1);
+      const elapsed = Math.round(performance.now() - activeStartedAt);
+      if (loading) {
+        setLoadingElapsedMs(elapsed);
+        return;
+      }
+
+      setSubmittingElapsedMs(elapsed);
+    }, 120);
 
     return () => {
       clearInterval(timer);
     };
-  }, [loading]);
+  }, [loading, loadingStartedAt, submitting, submittingStartedAt]);
 
   const confirmAndPush = useCallback(async () => {
     if (!renderedBrief || !selectedBriefType || !allowsGitExecution(selectedBriefType)) return;
     const commitPayload = getCommitPayload(renderedBrief);
     if (!commitPayload) return;
+    const submitStartAt = performance.now();
     setSubmitting(true);
     setError(null);
     setSteps(createInitialSteps());
+    setSubmittingStartedAt(submitStartAt);
+    setSubmittingElapsedMs(0);
 
     try {
       await applyCommitAndPush(commitPayload, (step) => {
@@ -1005,9 +990,24 @@ function App(props: {initialBriefType?: BriefType}) {
   });
 
   const content = [h(Text, {key: 'title', color: 'cyan'}, 'gai · AI Workspace Brief Assistant')];
-  if (loading) content.push(h(Text, {key: 'loading', color: 'yellow'}, getLoadingMessage(currentPhase, loadingFrame)));
-  if (loading && currentPhase) content.push(h(Text, {key: 'phase-loading', color: 'gray'}, `当前阶段: ${getPhaseLabel(currentPhase)}`));
-  if (submitting) content.push(h(Text, {key: 'submitting', color: 'yellow'}, '正在执行 git add / git commit / git push...'));
+  if (loading) {
+    const loadingView = buildLoadingViewModel(currentPhase, loadingFrame, loadingElapsedMs, getProviderLabel());
+    content.push(h(Box, {key: 'loading-panel', flexDirection: 'column', marginTop: 1}, [
+      h(Text, {key: 'loading-headline', color: loadingView.headlineColor}, loadingView.headline),
+      h(Text, {key: 'loading-stage', color: 'gray'}, loadingView.stageLine),
+      h(Text, {key: 'loading-meter', color: loadingView.headlineColor}, loadingView.meterLine),
+      h(Text, {key: 'loading-meta', color: 'gray'}, loadingView.metaLine)
+    ]));
+  }
+  if (submitting) {
+    const executionView = buildExecutionViewModel(steps, submittingElapsedMs);
+    content.push(h(Box, {key: 'execution-panel', flexDirection: 'column', marginTop: 1}, [
+      h(Text, {key: 'execution-headline', color: executionView.headlineColor}, executionView.headline),
+      h(Text, {key: 'execution-stage', color: 'gray'}, executionView.stageLine),
+      h(Text, {key: 'execution-meter', color: executionView.headlineColor}, executionView.meterLine),
+      h(Text, {key: 'execution-meta', color: 'gray'}, executionView.metaLine)
+    ]));
+  }
 
   if (!loading && !selectedBriefType) {
     content.push(h(Box, {key: 'brief-picker', flexDirection: 'column', marginTop: 1}, [
@@ -1042,8 +1042,8 @@ function App(props: {initialBriefType?: BriefType}) {
 
   if (submitting) {
     content.push(h(Box, {key: 'progress-box', flexDirection: 'column', marginTop: 1}, [
-      h(Text, {key: 'progress-title', color: 'yellow'}, '执行进度'),
-      ...steps.map((step) => h(Text, {key: `step-${step.name}`, color: step.status === 'success' ? 'green' : step.status === 'running' ? 'yellow' : 'white'}, `${getStepIcon(step.status)} ${getStepLabel(step.name)}`))
+      h(Text, {key: 'progress-title', color: 'green'}, '执行进度'),
+      ...steps.map((step) => h(Text, {key: `step-${step.name}`, color: step.status === 'success' ? 'green' : step.status === 'running' ? 'blue' : 'gray'}, `${getStepIcon(step.status)} ${getStepLabel(step.name)}`))
     ]));
   }
 

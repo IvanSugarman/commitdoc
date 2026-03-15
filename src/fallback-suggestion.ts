@@ -691,8 +691,8 @@ function inferFocus(files, keywords) {
     return '提交流程';
   }
 
-  if (/(cli|ink)/.test(joinedPaths)) {
-    return '终端交互体验';
+  if (/(cli|ink|loading-state|progress|status|panel|feedback)/.test(joinedPaths + joinedKeywords)) {
+    return '交互反馈体验';
   }
 
   return '代码变更总结';
@@ -727,7 +727,7 @@ function inferValue(focus, keywords) {
     return '模型调用稳定性';
   }
 
-  if (focus === '终端交互体验') {
+  if (focus === '交互反馈体验') {
     return '交互反馈一致性';
   }
 
@@ -910,6 +910,7 @@ export function buildFallbackBrief(prompt: string, reasoning: string, briefType:
   const themeChecklistSection = extractSection(prompt, 'THEME_CHECKLIST');
   const actionChecklistSection = extractSection(prompt, 'ACTION_CHECKLIST');
   const reviewerFocusTemplateSection = extractSection(prompt, 'REVIEWER_FOCUS_TEMPLATE');
+  const userVisibleSurfacesSection = extractSection(prompt, 'USER_VISIBLE_SURFACES');
   const outputLimits = resolveOutputLimits(outputProfileSection, extractSection(prompt, 'IR_OVERVIEW'));
   const files = parseFileSummary(fileSummarySection);
   const patch = extractSection(prompt, 'PATCH') || extractSection(prompt, 'PATCH_SUMMARY');
@@ -920,6 +921,10 @@ export function buildFallbackBrief(prompt: string, reasoning: string, briefType:
   const lines = getMeaningfulPatchLines(patch);
   const keywords = getTopKeywords(collectPatchKeywords(lines));
   const themes = themeChecklistSection
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const userVisibleSurfaces = userVisibleSurfacesSection
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean);
@@ -972,7 +977,7 @@ export function buildFallbackBrief(prompt: string, reasoning: string, briefType:
 
   return {
     briefType: 'cr-description',
-    changePurpose: buildFallbackChangePurpose(focus, themes),
+    changePurpose: buildFallbackChangePurpose(focus, themes, userVisibleSurfaces),
     keyChanges: bullets.length > 0
       ? bullets.slice(0, outputLimits.keyChangesMax)
       : [`总结当前工作区中与 ${focus} 相关的主要改动。`],
@@ -983,7 +988,7 @@ export function buildFallbackBrief(prompt: string, reasoning: string, briefType:
       outputLimits.impactScopeMax,
       focus
     ),
-    reviewerFocus: buildFallbackReviewerFocus(reviewerFocusTemplateSection, themes, irRisks),
+    reviewerFocus: buildFallbackReviewerFocus(reviewerFocusTemplateSection, themes, userVisibleSurfaces, irRisks),
     testingValidation: /(test|spec)\./i.test(nameStatusSection)
       ? '当前工作区包含测试文件改动，请确认更新后的测试仍覆盖目标行为。'
       : '当前工作区未检测到明确的测试文件改动，建议补充人工验证。'
@@ -1059,7 +1064,11 @@ function resolveOutputLimits(outputProfileSection, irOverviewSection) {
  * @param {string[]} themes 主题清单。
  * @return {string} 变更目的。
  */
-function buildFallbackChangePurpose(focus, themes) {
+function buildFallbackChangePurpose(focus, themes, userVisibleSurfaces = []) {
+  if (userVisibleSurfaces.length > 0) {
+    return `这次改动主要为了优化${userVisibleSurfaces.slice(0, 2).join('、')}，让相关行为变化在用户可见层面更清晰、更一致。`;
+  }
+
   if (themes.length >= 3) {
     return `这次改动主要为了解决 ${themes.slice(0, 3).join('、')} 之间的职责分散问题，统一 ${focus} 相关生成链路的边界与表达。`;
   }
@@ -1073,9 +1082,13 @@ function buildFallbackChangePurpose(focus, themes) {
  * @param {string} irRisks 风险文本。
  * @return {string} 评审关注点。
  */
-function buildFallbackReviewerFocus(template, themes, irRisks) {
+function buildFallbackReviewerFocus(template, themes, userVisibleSurfaces = [], irRisks) {
   if (template.trim()) {
     return template.trim();
+  }
+
+  if (userVisibleSurfaces.length > 0) {
+    return `请重点关注 ${userVisibleSurfaces.slice(0, 2).join(' 与 ')} 是否准确反映真实行为，并确认交互反馈不会误导使用者。`;
   }
 
   const firstRisk = irRisks.split('\n').filter(Boolean)[0];
