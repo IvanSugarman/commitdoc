@@ -136,6 +136,32 @@ test('parseGeneratedBrief supports distinct brief schemas', () => {
   );
 });
 
+test('parseGeneratedBrief supports array-shaped summary payloads', () => {
+  assert.deepEqual(
+    parseGeneratedBrief(
+      '[{"bullets":["统一 token usage 输出协议"]},{"bullets":["在 CLI 中展示本次 token 消耗"]}]',
+      'commit-summary'
+    ),
+    {
+      briefType: 'commit-summary',
+      bullets: ['统一 token usage 输出协议', '在 CLI 中展示本次 token 消耗']
+    }
+  );
+});
+
+test('parseGeneratedBrief recovers malformed summary payloads before fallback', () => {
+  assert.deepEqual(
+    parseGeneratedBrief(
+      '[{"bullets":["统一 token 使用数据模型"]}, {"bullets":["在 CLI 输出中集成 usage 与 cacheHit 字段"]}, {"bullets":["补齐 TokenUsage 相关单元测试"]]',
+      'commit-summary'
+    ),
+    {
+      briefType: 'commit-summary',
+      bullets: ['统一 token 使用数据模型', '在 CLI 输出中集成 usage 与 cacheHit 字段', '补齐 TokenUsage 相关单元测试']
+    }
+  );
+});
+
 test('buildZhipuPrompt remains compatible with fallback parsing', () => {
   const summary = {
     source: 'mixed-workspace',

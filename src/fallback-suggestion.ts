@@ -73,8 +73,7 @@ export function parseSuggestion(raw) {
  */
 export function parseGeneratedBrief(raw: string, briefType: BriefType): GeneratedBrief {
   const normalized = normalizeRawResponse(raw);
-  const candidate = extractJsonCandidate(normalized);
-  const parsed = JSON.parse(candidate);
+  const parsed = parseJsonLikeResponse(normalized, briefType);
 
   if (!parsed || typeof parsed !== 'object') {
     throw new Error('Invalid model response: not an object');
@@ -94,6 +93,124 @@ export function parseGeneratedBrief(raw: string, briefType: BriefType): Generate
   }
 
   return parseCrDescriptionBrief(/** @type {Record<string, unknown>} */ (parsed));
+}
+
+/**
+ * @description 解析 JSON 风格响应，并在轻微 schema 偏差时尽量恢复可用结果。
+ * @param {string} normalized 归一化后的模型文本。
+ * @param {BriefType} briefType brief 类型。
+ * @return {Record<string, unknown>} 解析后的对象。
+ */
+function parseJsonLikeResponse(normalized: string, briefType: BriefType) {
+  try {
+    const candidate = extractJsonCandidate(normalized);
+    const parsed = JSON.parse(candidate);
+
+    if (Array.isArray(parsed)) {
+      return normalizeArrayResponse(parsed, briefType);
+    }
+
+    return parsed;
+  } catch (error) {
+    const recovered = recoverMalformedResponse(normalized, briefType);
+    if (recovered) {
+      return recovered;
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * @description 规整数组形式的模型返回。
+ * @param {unknown[]} parsed 原始数组。
+ * @param {BriefType} briefType brief 类型。
+ * @return {Record<string, unknown>} 规整后的对象。
+ */
+function normalizeArrayResponse(parsed: unknown[], briefType: BriefType) {
+  const objects = parsed.filter((item) => item && typeof item === 'object') as Record<string, unknown>[];
+
+  if (briefType === 'commit-summary') {
+    return {
+      bullets: objects.flatMap((item) => normalizeBullets(item.bullets ?? item.points ?? item.items ?? item.changes ?? item.highlights))
+    };
+  }
+
+  if (briefType === 'commit-title') {
+    const nested = objects[0] || {};
+    return {
+      title: readFirstStringField(nested, ['title', 'subject', 'message', 'summary'])
+    };
+  }
+
+  if (briefType === 'commit') {
+    const nested = objects[0] || {};
+    return {
+      type: readFirstStringField(nested, ['type', 'commit_type', 'kind', 'category']),
+      subject: readFirstStringField(nested, ['subject', 'title', 'summary', 'message']),
+      bullets: objects.flatMap((item) => normalizeBullets(item.bullets ?? item.points ?? item.items ?? item.changes ?? item.highlights))
+    };
+  }
+
+  const first = objects[0] || {};
+  return {
+    changePurpose: readFirstStringField(first, ['changePurpose', 'purpose', 'summary']),
+    reviewerFocus: readFirstStringField(first, ['reviewerFocus', 'reviewFocus', 'focus']),
+    testingValidation: readFirstStringField(first, ['testingValidation', 'testing', 'validation']),
+    keyChanges: objects.flatMap((item) => normalizeBullets(item.keyChanges ?? item.changes ?? item.highlights)),
+    impactScope: objects.flatMap((item) => normalizeBullets(item.impactScope ?? item.scope ?? item.impacts))
+  };
+}
+
+/**
+ * @description 从轻微损坏的 JSON 文本中恢复关键信息。
+ * @param {string} text 归一化后的模型文本。
+ * @param {BriefType} briefType brief 类型。
+ * @return {Record<string, unknown> | null} 恢复后的对象。
+ */
+function recoverMalformedResponse(text: string, briefType: BriefType) {
+  if (briefType === 'commit-summary') {
+    const bullets = recoverStringArrayFields(text, ['bullets', 'points', 'items', 'changes', 'highlights']);
+    return bullets.length > 0 ? {bullets} : null;
+  }
+
+  if (briefType === 'commit-title') {
+    const title = recoverFirstQuotedField(text, ['title', 'subject', 'message', 'summary']);
+    return title ? {title} : null;
+  }
+
+  if (briefType === 'commit') {
+    const title = recoverFirstQuotedField(text, ['title', 'subject', 'message', 'summary']);
+    const bullets = recoverStringArrayFields(text, ['bullets', 'points', 'items', 'changes', 'highlights']);
+    if (!title && bullets.length === 0) {
+      return null;
+    }
+
+    return {
+      title,
+      subject: title,
+      type: inferTypeFromTitle(title),
+      bullets
+    };
+  }
+
+  const changePurpose = recoverFirstQuotedField(text, ['changePurpose', 'purpose', 'summary']);
+  const reviewerFocus = recoverFirstQuotedField(text, ['reviewerFocus', 'reviewFocus', 'focus']);
+  const testingValidation = recoverFirstQuotedField(text, ['testingValidation', 'testing', 'validation']);
+  const keyChanges = recoverStringArrayFields(text, ['keyChanges', 'changes', 'highlights']);
+  const impactScope = recoverStringArrayFields(text, ['impactScope', 'scope', 'impacts']);
+
+  if (!changePurpose && keyChanges.length === 0 && impactScope.length === 0) {
+    return null;
+  }
+
+  return {
+    changePurpose,
+    reviewerFocus,
+    testingValidation,
+    keyChanges,
+    impactScope
+  };
 }
 
 /**
@@ -347,6 +464,59 @@ function normalizeBullets(rawBullets) {
 }
 
 /**
+ * @description 从文本中恢复第一个被引号包裹的字段值。
+ * @param {string} text 原始文本。
+ * @param {string[]} fields 字段名列表。
+ * @return {string} 恢复后的字段值。
+ */
+function recoverFirstQuotedField(text, fields) {
+  for (const field of fields) {
+    const pattern = new RegExp(`"${field}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`, 'i');
+    const matched = text.match(pattern);
+    if (matched?.[1]) {
+      return matched[1]
+        .replace(/\\"/g, '"')
+        .replace(/\\n/g, '\n')
+        .trim();
+    }
+  }
+
+  return '';
+}
+
+/**
+ * @description 从轻微损坏的 JSON 文本中恢复字符串数组字段。
+ * @param {string} text 原始文本。
+ * @param {string[]} fields 字段名列表。
+ * @return {string[]} 恢复后的字符串数组。
+ */
+function recoverStringArrayFields(text, fields) {
+  /** @type {string[]} */
+  const values = [];
+
+  for (const field of fields) {
+    const pattern = new RegExp(`"${field}"\\s*:\\s*\\[([\\s\\S]*?)\\]`, 'gi');
+    const matches = text.matchAll(pattern);
+
+    for (const match of matches) {
+      const content = match[1] || '';
+      const stringPattern = /"((?:\\.|[^"\\])*)"/g;
+      for (const item of content.matchAll(stringPattern)) {
+        const value = item[1]
+          ?.replace(/\\"/g, '"')
+          .replace(/\\n/g, '\n')
+          .trim();
+        if (value) {
+          values.push(value);
+        }
+      }
+    }
+  }
+
+  return Array.from(new Set(values));
+}
+
+/**
  * @description 清理模型原始文本中的围栏与多余空白。
  * @param {string} raw 模型原始文本。
  * @return {string} 归一化后的文本。
@@ -366,6 +536,10 @@ function normalizeRawResponse(raw) {
  */
 function extractJsonCandidate(text) {
   if (text.startsWith('{') && text.endsWith('}')) {
+    return text;
+  }
+
+  if (text.startsWith('[') && text.endsWith(']')) {
     return text;
   }
 

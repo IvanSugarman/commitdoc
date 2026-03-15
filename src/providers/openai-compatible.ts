@@ -25,12 +25,28 @@ import {BASE_SYSTEM_PROMPT} from '../prompt.js';
 /** 生成模式 */
 export type GenerationMode = 'model' | 'zhipu-reasoning' | 'fallback-empty-response' | 'fallback-parse-failed';
 
+/** Token 使用信息 */
+export interface TokenUsage {
+  /** 输入 token 数 */
+  promptTokens: number;
+  /** 输出 token 数 */
+  completionTokens: number;
+  /** 总 token 数 */
+  totalTokens: number;
+  /** 推理 token 数 */
+  reasoningTokens: number;
+}
+
 /** Provider 生成结果 */
 export interface GenerationResult {
   /** brief 输出 */
   brief: GeneratedBrief;
   /** 生成模式 */
   mode: GenerationMode;
+  /** Token 使用信息 */
+  usage: TokenUsage | null;
+  /** 是否命中 brief 缓存 */
+  cacheHit: boolean;
 }
 
 /** 生成选项 */
@@ -64,13 +80,78 @@ export function createOpenAICompatibleConfig(overrides) {
 }
 
 /**
+ * @typedef {Object} RequestResult
+ * @property {ProviderMessage} message 模型消息对象。
+ * @property {TokenUsage | null} usage Token 使用信息。
+ */
+
+/**
+ * @description 规整模型 usage 结构。
+ * @param {any} usage 模型 usage。
+ * @return {TokenUsage | null} 规整后的 token 使用信息。
+ */
+export function normalizeTokenUsage(usage: any): TokenUsage | null {
+  if (!usage || typeof usage !== 'object') {
+    return null;
+  }
+
+  const promptTokens = Number(usage.prompt_tokens ?? usage.input_tokens ?? 0);
+  const completionTokens = Number(usage.completion_tokens ?? usage.output_tokens ?? 0);
+  const totalTokens = Number(usage.total_tokens ?? promptTokens + completionTokens);
+  const reasoningTokens = Number(
+    usage.completion_tokens_details?.reasoning_tokens ??
+      usage.output_tokens_details?.reasoning_tokens ??
+      usage.reasoning_tokens ??
+      0
+  );
+
+  if (![promptTokens, completionTokens, totalTokens, reasoningTokens].every((item) => Number.isFinite(item))) {
+    return null;
+  }
+
+  if (promptTokens <= 0 && completionTokens <= 0 && totalTokens <= 0 && reasoningTokens <= 0) {
+    return null;
+  }
+
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens,
+    reasoningTokens
+  };
+}
+
+/**
+ * @description 合并两次请求的 token 使用信息。
+ * @param {TokenUsage | null} left 左侧 usage。
+ * @param {TokenUsage | null} right 右侧 usage。
+ * @return {TokenUsage | null} 合并后的 usage。
+ */
+export function mergeTokenUsage(left: TokenUsage | null, right: TokenUsage | null): TokenUsage | null {
+  if (!left) {
+    return right;
+  }
+
+  if (!right) {
+    return left;
+  }
+
+  return {
+    promptTokens: left.promptTokens + right.promptTokens,
+    completionTokens: left.completionTokens + right.completionTokens,
+    totalTokens: left.totalTokens + right.totalTokens,
+    reasoningTokens: left.reasoningTokens + right.reasoningTokens
+  };
+}
+
+/**
  * @description 发起一次 chat completion 请求。
  * @param {OpenAI} client OpenAI 兼容客户端。
  * @param {ProviderConfig} config Provider 配置。
  * @param {string} model 模型名称。
  * @param {string} prompt 输入提示词。
  * @param {number} maxTokens 最大输出 token 数。
- * @return {Promise<ProviderMessage>} 模型消息对象。
+ * @return {Promise<RequestResult>} 模型消息对象与 token 使用信息。
  */
 async function requestMessage(client, config, model, prompt, maxTokens) {
   const requestBody = {
@@ -116,7 +197,10 @@ async function requestMessage(client, config, model, prompt, maxTokens) {
       response: serializeModelResponse(response)
     });
 
-    return response.choices?.[0]?.message || {};
+    return {
+      message: response.choices?.[0]?.message || {},
+      usage: normalizeTokenUsage(response.usage)
+    };
   } catch (error) {
     await writeModelLog({
       provider: config.provider,
@@ -175,7 +259,7 @@ function extractMessageText(message) {
  * @param {OpenAI} client OpenAI 兼容客户端。
  * @param {ProviderConfig} config Provider 配置。
  * @param {string} reasoning 模型 reasoning 文本。
- * @return {Promise<string>} 二次格式化后的 JSON 文本。
+ * @return {Promise<RequestResult>} 二次格式化后的 JSON 文本与 token 使用信息。
  */
 async function formatFromReasoning(client, config, reasoning, briefType) {
   const prompt = [
@@ -187,8 +271,13 @@ async function formatFromReasoning(client, config, reasoning, briefType) {
     reasoning.slice(-6000)
   ].join('\n');
 
-  const message = await requestMessage(client, config, config.formatModel, prompt, 220);
-  return extractMessageText(message);
+  const result = await requestMessage(client, config, config.formatModel, prompt, 220);
+  return {
+    message: {
+      content: extractMessageText(result.message)
+    },
+    usage: result.usage
+  };
 }
 
 /**
@@ -211,18 +300,24 @@ export async function generateWithOpenAICompatible(config, prompt, briefType, op
     prompt
   );
   const cached = options.bypassCache ? null : await readJsonCache<GenerationResult>('brief', cacheKey);
-  const shouldIgnoreCachedParseFailure = briefType === 'commit' && cached?.mode === 'fallback-parse-failed';
+  const shouldIgnoreCachedParseFailure = cached?.mode === 'fallback-parse-failed';
 
   if (cached && !shouldIgnoreCachedParseFailure) {
+    const cachedResult = {
+      ...cached,
+      usage: cached.usage || null,
+      cacheHit: true
+    };
     await writePipelineLog('brief.cache', {
       provider: config.provider,
       model: config.model,
       briefType,
       hit: true,
       mode: cached.mode,
+      usage: cachedResult.usage,
       bypassCache: false
     });
-    return cached;
+    return cachedResult;
   }
 
   if (shouldIgnoreCachedParseFailure) {
@@ -251,18 +346,23 @@ export async function generateWithOpenAICompatible(config, prompt, briefType, op
   });
 
   try {
-    const message = await requestMessage(client, config, config.model, prompt, 800);
-    let text = extractMessageText(message);
+    const response = await requestMessage(client, config, config.model, prompt, 800);
+    let text = extractMessageText(response.message);
+    let usage = response.usage;
 
-    if (config.enableFormatFallback && !text && typeof message.reasoning_content === 'string' && message.reasoning_content.trim()) {
-      text = await formatFromReasoning(client, config, message.reasoning_content.trim(), briefType);
+    if (config.enableFormatFallback && !text && typeof response.message.reasoning_content === 'string' && response.message.reasoning_content.trim()) {
+      const formatted = await formatFromReasoning(client, config, response.message.reasoning_content.trim(), briefType);
+      text = extractMessageText(formatted.message);
+      usage = mergeTokenUsage(usage, formatted.usage);
     }
 
     if (text) {
       try {
         const result = {
           brief: parseGeneratedBrief(text, briefType),
-          mode: 'model'
+          mode: 'model',
+          usage,
+          cacheHit: false
         };
         await writeJsonCache('brief', cacheKey, result);
         await writePipelineLog('brief.cache', {
@@ -271,13 +371,16 @@ export async function generateWithOpenAICompatible(config, prompt, briefType, op
           briefType,
           hit: false,
           mode: result.mode,
+          usage: result.usage,
           bypassCache: Boolean(options.bypassCache)
         });
         return result;
       } catch {
         const result = {
-          brief: buildFallbackBrief(prompt, typeof message.reasoning_content === 'string' ? message.reasoning_content : '', briefType),
-          mode: 'fallback-parse-failed'
+          brief: buildFallbackBrief(prompt, typeof response.message.reasoning_content === 'string' ? response.message.reasoning_content : '', briefType),
+          mode: 'fallback-parse-failed',
+          usage,
+          cacheHit: false
         };
         await writeJsonCache('brief', cacheKey, result);
         await writePipelineLog('brief.cache', {
@@ -286,6 +389,7 @@ export async function generateWithOpenAICompatible(config, prompt, briefType, op
           briefType,
           hit: false,
           mode: result.mode,
+          usage: result.usage,
           bypassCache: Boolean(options.bypassCache)
         });
         return result;
@@ -293,8 +397,10 @@ export async function generateWithOpenAICompatible(config, prompt, briefType, op
     }
 
     const result = {
-      brief: buildFallbackBrief(prompt, typeof message.reasoning_content === 'string' ? message.reasoning_content : '', briefType),
-      mode: 'fallback-empty-response'
+      brief: buildFallbackBrief(prompt, typeof response.message.reasoning_content === 'string' ? response.message.reasoning_content : '', briefType),
+      mode: 'fallback-empty-response',
+      usage,
+      cacheHit: false
     };
     await writeJsonCache('brief', cacheKey, result);
     await writePipelineLog('brief.cache', {
@@ -303,6 +409,7 @@ export async function generateWithOpenAICompatible(config, prompt, briefType, op
       briefType,
       hit: false,
       mode: result.mode,
+      usage: result.usage,
       bypassCache: Boolean(options.bypassCache)
     });
     return result;

@@ -4,3 +4,5 @@ node_modules
 .gai-cache
 .DS_Store
 dist
+
+debug.md

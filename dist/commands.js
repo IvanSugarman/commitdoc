@@ -1,5 +1,7 @@
 /** 可生成的 brief 类型 */
 export const BRIEF_TYPES = ['commit', 'commit-title', 'commit-summary', 'cr-description'];
+/** debug 段落类型 */
+export const DEBUG_SECTIONS = ['meta', 'system', 'rules', 'ir', 'context', 'patch', 'prompt'];
 /** brief 选项列表 */
 const BRIEF_OPTIONS = [
     {
@@ -71,7 +73,7 @@ export function parseBriefType(rawType) {
  * @return {ResolvedCommand} 已解析命令。
  */
 export function resolveCliCommand(args) {
-    const [command, subcommand] = args;
+    const [command, subcommand, ...rest] = args;
     if (!command) {
         return { kind: 'interactive' };
     }
@@ -79,7 +81,13 @@ export function resolveCliCommand(args) {
         return { kind: 'install' };
     }
     if (command === 'doctor') {
-        return subcommand === '--token' ? { kind: 'doctor-token' } : { kind: 'doctor' };
+        if (subcommand === '--token') {
+            return { kind: 'doctor-token' };
+        }
+        if (subcommand === '--debug') {
+            return parseDoctorDebugOptions(rest);
+        }
+        return { kind: 'doctor' };
     }
     if (command === 'config') {
         return { kind: 'config' };
@@ -102,6 +110,47 @@ export function resolveCliCommand(args) {
     throw new Error(`Unknown command: ${command}. Run gai --help for usage.`);
 }
 /**
+ * @description 解析 doctor debug 子参数。
+ * @param {string[]} args 原始参数。
+ * @return {ResolvedCommand} 已解析命令。
+ */
+function parseDoctorDebugOptions(args) {
+    /** @type {BriefType | undefined} */
+    let briefType;
+    /** @type {DebugSection | undefined} */
+    let section;
+    for (let index = 0; index < args.length; index += 1) {
+        const current = args[index];
+        if (current === '--brief') {
+            briefType = parseBriefType(args[index + 1]);
+            index += 1;
+            continue;
+        }
+        if (current === '--section') {
+            section = parseDebugSection(args[index + 1]);
+            index += 1;
+            continue;
+        }
+        throw new Error('Unknown doctor debug option. Usage: gai doctor --debug [--brief <type>] [--section <meta|system|rules|ir|context|patch|prompt>]');
+    }
+    return {
+        kind: 'doctor-debug',
+        briefType,
+        section
+    };
+}
+/**
+ * @description 解析 debug 段落类型。
+ * @param {string | undefined} rawSection 原始段落文本。
+ * @return {DebugSection} debug 段落类型。
+ */
+export function parseDebugSection(rawSection) {
+    if (rawSection && DEBUG_SECTIONS.includes(rawSection)) {
+        return rawSection;
+    }
+    throw new Error(`Debug section is required. Usage: gai doctor --debug --section <${DEBUG_SECTIONS.join('|')}>`);
+}
+/**
  * @description 构建帮助文本。
  * @return {string} 帮助文本。
  */
@@ -116,6 +165,9 @@ export function formatHelpText() {
         '  gai install                        写入 ~/.zshrc 并校验 gai 命令可用',
         '  gai doctor                         检查 Node、Git、profiles、Provider、zsh 安装状态',
         '  gai doctor --token                 估算当前 mixed workspace 改动的 prompt 体积与 token 使用',
+        '  gai doctor --debug                 打印当前 provider 下预计提交给模型的完整 prompt 内容',
+        '  gai doctor --debug --brief <type>  仅打印指定 brief 的 prompt 内容',
+        '  gai doctor --debug --section <s>   仅打印指定段落，s 可选 meta/system/rules/ir/context/patch/prompt',
         '  gai config                         编辑当前激活 profile 配置并同步到 .env/active.env',
         '  gai profiles                       查看全部 profile',
         '  gai use <profile>                  一键切换当前生效模型 profile',

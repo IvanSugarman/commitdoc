@@ -12,6 +12,20 @@ test('resolveCliCommand parses commit command', () => {
   assert.deepEqual(result, {kind: 'interactive', initialBriefType: 'commit'});
 });
 
+test('resolveCliCommand parses doctor debug command', () => {
+  const result = resolveCliCommand(['doctor', '--debug']);
+  assert.deepEqual(result, {
+    kind: 'doctor-debug',
+    briefType: undefined,
+    section: undefined,
+  });
+});
+
+test('resolveCliCommand parses doctor debug filters', () => {
+  const result = resolveCliCommand(['doctor', '--debug', '--brief', 'commit-summary', '--section', 'ir']);
+  assert.deepEqual(result, {kind: 'doctor-debug', briefType: 'commit-summary', section: 'ir'});
+});
+
 test('allowsGitExecution only enables commit flow', () => {
   assert.equal(allowsGitExecution('commit'), true);
   assert.equal(allowsGitExecution('commit-title'), false);
@@ -24,4 +38,7 @@ test('formatHelpText includes brief commands', () => {
   assert.match(help, /gai brief <type>/);
   assert.match(help, /gai commit/);
   assert.match(help, /mixed workspace/);
+  assert.match(help, /gai doctor --debug/);
+  assert.match(help, /--brief <type>/);
+  assert.match(help, /--section <s>/);
 });

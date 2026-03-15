@@ -3,7 +3,7 @@ import type {BriefType} from '../commands.js';
 import {buildBriefFromReasoning, buildFallbackBrief, parseGeneratedBrief} from '../fallback-suggestion.js';
 import {hashParts, readJsonCache, serializeModelResponse, writeJsonCache, writeModelLog, writePipelineLog} from '../model-log.js';
 import {BASE_SYSTEM_PROMPT} from '../prompt.js';
-import {createOpenAICompatibleConfig} from './openai-compatible.js';
+import {createOpenAICompatibleConfig, normalizeTokenUsage} from './openai-compatible.js';
 
 /**
  * @description 构建智谱 Provider 配置。
@@ -42,18 +42,24 @@ export async function generateSuggestion(prompt, briefType: BriefType, options: 
     prompt
   );
   const cached = options.bypassCache ? null : await readJsonCache<import('./openai-compatible.js').GenerationResult>('brief', cacheKey);
-  const shouldIgnoreCachedParseFailure = briefType === 'commit' && cached?.mode === 'fallback-parse-failed';
+  const shouldIgnoreCachedParseFailure = cached?.mode === 'fallback-parse-failed';
 
   if (cached && !shouldIgnoreCachedParseFailure) {
+    const cachedResult = {
+      ...cached,
+      usage: cached.usage || null,
+      cacheHit: true
+    };
     await writePipelineLog('brief.cache', {
       provider: config.provider,
       model: config.model,
       briefType,
       hit: true,
       mode: cached.mode,
+      usage: cachedResult.usage,
       bypassCache: false
     });
-    return cached;
+    return cachedResult;
   }
 
   if (shouldIgnoreCachedParseFailure) {
@@ -126,12 +132,15 @@ export async function generateSuggestion(prompt, briefType: BriefType, options: 
     const message: any = response.choices?.[0]?.message || {};
     const content = typeof message.content === 'string' ? message.content.trim() : '';
     const reasoning = typeof message.reasoning_content === 'string' ? message.reasoning_content.trim() : '';
+    let usage = normalizeTokenUsage(response.usage);
 
     if (content) {
       try {
         const result = {
           brief: parseGeneratedBrief(content, briefType),
-          mode: 'model'
+          mode: 'model',
+          usage,
+          cacheHit: false
         };
         await writeJsonCache('brief', cacheKey, result);
         await writePipelineLog('brief.cache', {
@@ -140,6 +149,7 @@ export async function generateSuggestion(prompt, briefType: BriefType, options: 
           briefType,
           hit: false,
           mode: result.mode,
+          usage: result.usage,
           bypassCache: Boolean(options.bypassCache)
         });
         return result;
@@ -147,7 +157,9 @@ export async function generateSuggestion(prompt, briefType: BriefType, options: 
         if (reasoning) {
           const result = {
             brief: buildBriefFromReasoning(prompt, reasoning, briefType),
-            mode: 'zhipu-reasoning'
+            mode: 'zhipu-reasoning',
+            usage,
+            cacheHit: false
           };
           await writeJsonCache('brief', cacheKey, result);
           await writePipelineLog('brief.cache', {
@@ -156,6 +168,7 @@ export async function generateSuggestion(prompt, briefType: BriefType, options: 
             briefType,
             hit: false,
             mode: result.mode,
+            usage: result.usage,
             bypassCache: Boolean(options.bypassCache)
           });
           return result;
@@ -163,7 +176,9 @@ export async function generateSuggestion(prompt, briefType: BriefType, options: 
 
         const result = {
           brief: buildFallbackBrief(prompt, content, briefType),
-          mode: 'fallback-parse-failed'
+          mode: 'fallback-parse-failed',
+          usage,
+          cacheHit: false
         };
         await writeJsonCache('brief', cacheKey, result);
         await writePipelineLog('brief.cache', {
@@ -172,6 +187,7 @@ export async function generateSuggestion(prompt, briefType: BriefType, options: 
           briefType,
           hit: false,
           mode: result.mode,
+          usage: result.usage,
           bypassCache: Boolean(options.bypassCache)
         });
         return result;
@@ -181,7 +197,9 @@ export async function generateSuggestion(prompt, briefType: BriefType, options: 
     if (reasoning) {
       const result = {
         brief: buildBriefFromReasoning(prompt, reasoning, briefType),
-        mode: 'zhipu-reasoning'
+        mode: 'zhipu-reasoning',
+        usage,
+        cacheHit: false
       };
       await writeJsonCache('brief', cacheKey, result);
       await writePipelineLog('brief.cache', {
@@ -190,6 +208,7 @@ export async function generateSuggestion(prompt, briefType: BriefType, options: 
         briefType,
         hit: false,
         mode: result.mode,
+        usage: result.usage,
         bypassCache: Boolean(options.bypassCache)
       });
       return result;
@@ -197,7 +216,9 @@ export async function generateSuggestion(prompt, briefType: BriefType, options: 
 
     const result = {
       brief: buildFallbackBrief(prompt, '', briefType),
-      mode: 'fallback-empty-response'
+      mode: 'fallback-empty-response',
+      usage,
+      cacheHit: false
     };
     await writeJsonCache('brief', cacheKey, result);
     await writePipelineLog('brief.cache', {
@@ -206,6 +227,7 @@ export async function generateSuggestion(prompt, briefType: BriefType, options: 
       briefType,
       hit: false,
       mode: result.mode,
+      usage: result.usage,
       bypassCache: Boolean(options.bypassCache)
     });
     return result;

@@ -16,7 +16,7 @@ import { applyCommitAndPush, getChangesForSummary, isGitRepo } from './git.js';
 import { buildExecutionViewModel, buildLoadingViewModel, getPhaseLabel } from './loading-state.js';
 import { writePipelineLog } from './model-log.js';
 import { generateSuggestion, getProviderDefaults, getProviderName, getResolvedProviderConfig } from './openai.js';
-import { buildPrompt, buildZhipuPrompt } from './prompt.js';
+import { BASE_SYSTEM_PROMPT, buildPrompt, buildZhipuPrompt } from './prompt.js';
 /** @type {(file: string, args: string[]) => Promise<{stdout: string; stderr: string}>} */
 const execFileAsync = promisify(execFile);
 /** @type {readonly string[]} */
@@ -497,6 +497,123 @@ async function analyzeTokenUsage() {
         notes
     };
 }
+/**
+ * @description 构建 doctor debug 输出。
+ * @param {{ briefType?: BriefType; section?: DebugSection }} [options] 调试选项。
+ * @return {Promise<string>} 调试文本。
+ */
+async function buildDoctorDebugOutput(options = {}) {
+    if (!(await isGitRepo())) {
+        throw new Error('Current directory is not a git repository.');
+    }
+    const summary = await getChangesForSummary();
+    if (!summary.nameStatus || !summary.patch) {
+        throw new Error('No changes found in staged or working tree.');
+    }
+    const provider = getProviderLabel();
+    const providerName = getProviderName();
+    const promptBuilder = providerName === 'zhipu' || providerName === 'ark' ? 'buildZhipuPrompt' : 'buildPrompt';
+    const briefOptions = options.briefType ? getBriefOptions().filter((item) => item.type === options.briefType) : getBriefOptions();
+    const briefSections = briefOptions.map((option) => {
+        const prompt = buildProviderPrompt(summary, option.type);
+        const promptBody = renderPromptDebugContent(prompt, options.section);
+        return [
+            `## Brief: ${option.type}`,
+            `label: ${option.label}`,
+            `prompt builder: ${promptBuilder}`,
+            `prompt chars: ${prompt.length}`,
+            `estimated input tokens: ${estimateTokens(prompt.length)}`,
+            '',
+            promptBody
+        ].join('\n');
+    });
+    const sections = [
+        'gai doctor --debug',
+        '',
+        `provider: ${provider}`,
+        `source: ${summary.source}`,
+        `strategy: ${summary.strategy}`,
+        `files: ${summary.stats.fileCount}`,
+        `ignored files: ${summary.stats.ignoredFileCount}`,
+        `high context files: ${summary.stats.highContextFileCount}`,
+        options.briefType ? `brief filter: ${options.briefType}` : 'brief filter: all',
+        options.section ? `section filter: ${options.section}` : 'section filter: all'
+    ];
+    if (!options.section || options.section === 'system') {
+        sections.push('', '## System Prompt', BASE_SYSTEM_PROMPT);
+    }
+    if (!options.section || options.section !== 'system') {
+        sections.push('', ...briefSections);
+    }
+    return sections.join('\n');
+}
+/**
+ * @description 根据 debug 段落过滤 prompt 内容。
+ * @param {string} prompt 完整 prompt。
+ * @param {DebugSection | undefined} section 段落过滤。
+ * @return {string} 过滤后的内容。
+ */
+function renderPromptDebugContent(prompt, section) {
+    if (!section || section === 'prompt') {
+        return prompt;
+    }
+    const rules = extractPromptRules(prompt);
+    const blocks = extractPromptBlocks(prompt);
+    if (section === 'rules') {
+        return rules;
+    }
+    if (section === 'meta') {
+        return selectPromptBlocks(blocks, ['BRIEF_TYPE', 'SOURCE', 'STRATEGY', 'CHANGE_OVERVIEW', 'STATS', 'OUTPUT_PROFILE']);
+    }
+    if (section === 'ir') {
+        return selectPromptBlocks(blocks, ['IR_OVERVIEW', 'IR_CHANGES', 'IR_RISKS', 'MODULE_CLUSTERS', 'PRIMARY_CHANGES', 'THEME_CHECKLIST']);
+    }
+    if (section === 'context') {
+        return selectPromptBlocks(blocks, ['NARRATIVE_HINT', 'ACTION_CHECKLIST', 'REVIEWER_FOCUS_TEMPLATE', 'USER_VISIBLE_SURFACES', 'FILES_OVERVIEW', 'SEMANTIC_HINTS', 'GROUP_SUMMARY', 'KEY_FILES', 'TEST_FILES', 'FILE_SUMMARY', 'NAME_STATUS', 'CONTEXT_SUMMARY']);
+    }
+    if (section === 'patch') {
+        return selectPromptBlocks(blocks, ['PATCH_SUMMARY', 'PATCH']);
+    }
+    return prompt;
+}
+/**
+ * @description 提取 prompt 规则区。
+ * @param {string} prompt 完整 prompt。
+ * @return {string} 规则区文本。
+ */
+function extractPromptRules(prompt) {
+    const marker = '\n\n[BRIEF_TYPE]\n';
+    const index = prompt.indexOf(marker);
+    return index === -1 ? prompt : prompt.slice(0, index).trim();
+}
+/**
+ * @description 提取 prompt 中的段落块。
+ * @param {string} prompt 完整 prompt。
+ * @return {Map<string, string>} 段落映射。
+ */
+function extractPromptBlocks(prompt) {
+    /** @type {Map<string, string>} */
+    const blocks = new Map();
+    const pattern = /\[([A-Z_]+)\]\n([\s\S]*?)(?=\n\n\[[A-Z_]+\]\n|$)/g;
+    for (const match of prompt.matchAll(pattern)) {
+        const name = match[1];
+        const content = match[2]?.trimEnd() || '';
+        blocks.set(name, `[${name}]\n${content}`);
+    }
+    return blocks;
+}
+/**
+ * @description 根据名称筛选 prompt 段落。
+ * @param {Map<string, string>} blocks 段落映射。
+ * @param {string[]} names 目标段落名。
+ * @return {string} 过滤后的文本。
+ */
+function selectPromptBlocks(blocks, names) {
+    return names
+        .map((name) => blocks.get(name))
+        .filter(Boolean)
+        .join('\n\n');
+}
 function getSourceLabel(source) {
     if (source === 'mixed-workspace') {
         return '混合工作区改动';
@@ -530,6 +647,32 @@ function getGenerationModeLabel(mode) {
         return 'Fallback（模型未返回有效内容）';
     }
     return '未知';
+}
+/**
+ * @description 格式化 token 使用信息。
+ * @param {GenerationUsage} usage token 使用信息。
+ * @param {boolean} cacheHit 是否命中 brief 缓存。
+ * @return {string} 展示文案。
+ */
+function formatTokenUsageLine(usage, cacheHit) {
+    if (cacheHit) {
+        if (!usage) {
+            return '本次 Token: 0（命中 brief 缓存）';
+        }
+        return `本次 Token: 0（命中 brief 缓存，上次模型调用 input ${usage.promptTokens} / output ${usage.completionTokens} / total ${usage.totalTokens}）`;
+    }
+    if (!usage) {
+        return '本次 Token: provider 未返回 usage';
+    }
+    const segments = [
+        `input ${usage.promptTokens}`,
+        `output ${usage.completionTokens}`,
+        `total ${usage.totalTokens}`
+    ];
+    if (usage.reasoningTokens > 0) {
+        segments.push(`reasoning ${usage.reasoningTokens}`);
+    }
+    return `本次 Token: ${segments.join(' / ')}`;
 }
 /**
  * @description 计算阶段总耗时。
@@ -629,6 +772,14 @@ async function runConfig() {
         rl.close();
     }
 }
+/**
+ * @description 打印调试信息，展示预计发送给模型的完整内容。
+ * @param {{ briefType?: BriefType; section?: DebugSection }} [options] 调试选项。
+ * @return {Promise<void>} 输出完成。
+ */
+async function printDoctorDebug(options = {}) {
+    process.stdout.write(`${await buildDoctorDebugOutput(options)}\n`);
+}
 function printHelp() {
     process.stdout.write(formatHelpText());
     process.stdout.write('\n');
@@ -684,6 +835,8 @@ function App(props) {
     const [loadingElapsedMs, setLoadingElapsedMs] = useState(0);
     const [submittingStartedAt, setSubmittingStartedAt] = useState(null);
     const [submittingElapsedMs, setSubmittingElapsedMs] = useState(0);
+    const [generationUsage, setGenerationUsage] = useState(null);
+    const [briefCacheHit, setBriefCacheHit] = useState(false);
     const runGenerate = useCallback(async (briefType, options = {}) => {
         const loadingStartAt = performance.now();
         setLoading(true);
@@ -691,6 +844,8 @@ function App(props) {
         setSteps(createInitialSteps());
         setPhaseTimings([]);
         setGenerationMode(null);
+        setGenerationUsage(null);
+        setBriefCacheHit(false);
         setCurrentPhase('git');
         setLoadingStartedAt(loadingStartAt);
         setLoadingElapsedMs(0);
@@ -731,6 +886,8 @@ function App(props) {
                 source,
                 strategy,
                 mode: generated.mode,
+                usage: generated.usage,
+                cacheHit: generated.cacheHit,
                 bypassBriefCache: Boolean(options.bypassBriefCache)
             });
             nextPhaseTimings.push({ name: 'model', durationMs: Math.round(performance.now() - modelStart) });
@@ -748,6 +905,8 @@ function App(props) {
             setSummarySource(source);
             setSummaryStrategy(strategy);
             setGenerationMode(generated.mode);
+            setGenerationUsage(generated.usage || null);
+            setBriefCacheHit(Boolean(generated.cacheHit));
             setPhaseTimings(nextPhaseTimings);
             setMenuIndex(0);
             await writePipelineLog('cli.generate.complete', {
@@ -755,6 +914,8 @@ function App(props) {
                 source,
                 strategy,
                 mode: generated.mode,
+                usage: generated.usage,
+                cacheHit: generated.cacheHit,
                 bypassBriefCache: Boolean(options.bypassBriefCache),
                 phaseTimings: nextPhaseTimings
             });
@@ -764,6 +925,8 @@ function App(props) {
             setSummarySource(null);
             setSummaryStrategy(null);
             setGenerationMode(null);
+            setGenerationUsage(null);
+            setBriefCacheHit(false);
             setPhaseTimings([]);
             setError(cause instanceof Error ? cause.message : String(cause));
             await writePipelineLog('cli.generate.error', {
@@ -925,6 +1088,7 @@ function App(props) {
             h(Text, { key: 'strategy', color: 'gray' }, `策略: ${summaryStrategy === 'incremental' ? '增量' : summaryStrategy === 'contextual' ? '增量 + 上下文' : '压缩摘要'}`),
             h(Text, { key: 'provider', color: 'gray' }, `Provider: ${getProviderLabel()}`),
             h(Text, { key: 'generation-mode', color: generationMode === 'model' ? 'green' : generationMode === 'zhipu-reasoning' ? 'cyan' : 'yellow' }, `生成方式: ${getGenerationModeLabel(generationMode)}`),
+            h(Text, { key: 'token-usage', color: 'gray' }, formatTokenUsageLine(generationUsage, briefCacheHit)),
             h(Text, { key: 'timings-title', color: 'green' }, '阶段耗时'),
             ...phaseTimings.map((item) => h(Text, { key: `timing-${item.name}`, color: 'gray' }, `${getPhaseLabel(item.name)}: ${item.durationMs}ms`)),
             h(Text, { key: 'timings-total', color: 'gray' }, `总计: ${getTotalPhaseDuration(phaseTimings)}ms`),
@@ -957,6 +1121,13 @@ async function main() {
     }
     if (resolvedCommand.kind === 'doctor-token') {
         render(h(TokenDoctorApp));
+        return;
+    }
+    if (resolvedCommand.kind === 'doctor-debug') {
+        await printDoctorDebug({
+            briefType: resolvedCommand.briefType,
+            section: resolvedCommand.section
+        });
         return;
     }
     if (resolvedCommand.kind === 'doctor') {
