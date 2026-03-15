@@ -9,14 +9,17 @@ import { promisify } from 'node:util';
 import readline from 'node:readline/promises';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box, Text, render, useApp, useInput } from 'ink';
+import { getCommitPayload, normalizeCrDescriptionBrief, renderBrief } from './briefs.js';
+import { allowsGitExecution, formatHelpText, getBriefOptions, getBriefOption, resolveCliCommand } from './commands.js';
 import { ACTIVE_ENV_PATH, ENV_DIR, PROJECT_ROOT } from './env.js';
 import { applyCommitAndPush, getChangesForSummary, isGitRepo } from './git.js';
+import { writePipelineLog } from './model-log.js';
 import { generateSuggestion, getProviderDefaults, getProviderName, getResolvedProviderConfig } from './openai.js';
 import { buildPrompt, buildZhipuPrompt } from './prompt.js';
 /** @type {(file: string, args: string[]) => Promise<{stdout: string; stderr: string}>} */
 const execFileAsync = promisify(execFile);
 /** @type {readonly string[]} */
-const MENU_OPTIONS = ['Confirm', 'Regenerate', 'Cancel'];
+const RESULT_MENU_OPTIONS = ['Confirm', 'Regenerate', 'Back', 'Cancel'];
 /** @type {typeof React.createElement} */
 const h = React.createElement;
 /** @type {string} */
@@ -58,7 +61,7 @@ const DEFAULT_ENV = {
  */
 /**
  * @typedef {Object} TokenDoctorResult
- * @property {'staged'|'working-tree'} source 变更来源。
+ * @property {'staged'|'working-tree'|'mixed-workspace'} source 变更来源。
  * @property {'incremental'|'contextual'|'compressed'} strategy 摘要策略。
  * @property {number} fileCount 文件数。
  * @property {number} ignoredFileCount 被忽略文件数。
@@ -450,9 +453,9 @@ function estimateTokens(chars) {
  * @param {import('./prompt.js').PromptInput} summary 摘要输入。
  * @return {string} 最终提示词。
  */
-function buildProviderPrompt(summary) {
+function buildProviderPrompt(summary, briefType) {
     const provider = getProviderName();
-    return provider === 'zhipu' || provider === 'ark' ? buildZhipuPrompt(summary) : buildPrompt(summary);
+    return provider === 'zhipu' || provider === 'ark' ? buildZhipuPrompt(summary, briefType) : buildPrompt(summary, briefType);
 }
 async function analyzeTokenUsage() {
     if (!(await isGitRepo())) {
@@ -462,7 +465,7 @@ async function analyzeTokenUsage() {
     if (!summary.nameStatus || !summary.patch) {
         throw new Error('No changes found in staged or working tree.');
     }
-    const prompt = buildProviderPrompt(summary);
+    const prompt = buildProviderPrompt(summary, 'commit');
     const notes = [];
     if (summary.stats.ignoredFileCount > 0) {
         notes.push(`已忽略 ${summary.stats.ignoredFileCount} 个低价值文件，减少无效 token 消耗`);
@@ -497,6 +500,9 @@ async function analyzeTokenUsage() {
     };
 }
 function getSourceLabel(source) {
+    if (source === 'mixed-workspace') {
+        return '混合工作区改动';
+    }
     return source === 'staged' ? '暂存区改动' : '工作区改动';
 }
 function getStrategyLabel(strategy) {
@@ -659,26 +665,18 @@ async function runConfig() {
     }
 }
 function printHelp() {
-    process.stdout.write([
-        'gai',
-        '',
-        '用法:',
-        '  gai                生成 Commit 建议并交互执行 git add / commit / push',
-        '  gai install        写入 ~/.zshrc 并校验 gai 命令可用',
-        '  gai doctor         检查 Node、Git、profiles、Provider、zsh 安装状态',
-        '  gai doctor --token 估算当前改动的 prompt 体积与 token 使用',
-        '  gai config         编辑当前激活 profile 配置并同步到 .env/active.env',
-        '  gai profiles       查看全部 profile',
-        '  gai use <profile>  一键切换当前生效模型 profile',
-        '  gai --help         查看帮助'
-    ].join('\n'));
+    process.stdout.write(formatHelpText());
     process.stdout.write('\n');
-}
-function formatTitle(value) {
-    return `${value.type}: ${value.subject}`;
 }
 function MenuItem(props) {
     return h(Text, { color: props.selected ? 'cyan' : 'white' }, `${props.selected ? '>' : ' '} ${props.option}`);
+}
+function BriefMenuItem(props) {
+    const option = getBriefOption(props.option);
+    return h(Box, { flexDirection: 'column' }, [
+        h(Text, { key: `${props.option}-label`, color: props.selected ? 'cyan' : 'white' }, `${props.selected ? '>' : ' '} ${option.label}`),
+        h(Text, { key: `${props.option}-desc`, color: 'gray' }, `  ${option.description}`)
+    ]);
 }
 function getStepLabel(name) {
     if (name === 'add')
@@ -701,13 +699,15 @@ function createInitialSteps() {
         { name: 'push', status: 'idle' }
     ];
 }
-function App() {
+function App(props) {
     const { exit } = useApp();
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-    const [suggestion, setSuggestion] = useState(null);
+    const [renderedBrief, setRenderedBrief] = useState(null);
     const [menuIndex, setMenuIndex] = useState(0);
+    const [briefMenuIndex, setBriefMenuIndex] = useState(0);
     const [submitting, setSubmitting] = useState(false);
+    const [selectedBriefType, setSelectedBriefType] = useState(props.initialBriefType || null);
     const [summarySource, setSummarySource] = useState(null);
     const [summaryStrategy, setSummaryStrategy] = useState(null);
     const [generationMode, setGenerationMode] = useState(/** @type {GenerationMode | null} */ (null));
@@ -715,14 +715,19 @@ function App() {
     const [phaseTimings, setPhaseTimings] = useState(/** @type {PhaseTiming[]} */ ([]));
     const [currentPhase, setCurrentPhase] = useState(/** @type {PhaseName | null} */ (null));
     const [loadingFrame, setLoadingFrame] = useState(0);
-    const runGenerate = useCallback(async () => {
+    const runGenerate = useCallback(async (briefType, options = {}) => {
         setLoading(true);
         setError(null);
         setSteps(createInitialSteps());
         setPhaseTimings([]);
         setGenerationMode(null);
         setCurrentPhase('git');
+        setSelectedBriefType(briefType);
         try {
+            await writePipelineLog('cli.generate.start', {
+                briefType,
+                bypassBriefCache: Boolean(options.bypassBriefCache)
+            });
             const repo = await isGitRepo();
             if (!repo)
                 throw new Error('Current directory is not a git repository.');
@@ -736,26 +741,64 @@ function App() {
                 throw new Error('No changes found in staged or working tree.');
             setCurrentPhase('prompt');
             const promptStart = performance.now();
-            const prompt = buildProviderPrompt(summaryInput);
+            const prompt = buildProviderPrompt(summaryInput, briefType);
+            await writePipelineLog('prompt.built', {
+                briefType,
+                source,
+                strategy,
+                promptChars: prompt.length
+            });
             nextPhaseTimings.push({ name: 'prompt', durationMs: Math.round(performance.now() - promptStart) });
             setCurrentPhase('model');
             const modelStart = performance.now();
-            const generated = await generateSuggestion(prompt);
+            const generated = await generateSuggestion(prompt, briefType, {
+                bypassCache: Boolean(options.bypassBriefCache)
+            });
+            await writePipelineLog('brief.generated', {
+                briefType,
+                source,
+                strategy,
+                mode: generated.mode,
+                bypassBriefCache: Boolean(options.bypassBriefCache)
+            });
             nextPhaseTimings.push({ name: 'model', durationMs: Math.round(performance.now() - modelStart) });
-            setSuggestion({ title: formatTitle(generated.suggestion), bullets: generated.suggestion.bullets });
+            const brief = generated.brief.briefType === 'cr-description'
+                ? normalizeCrDescriptionBrief(generated.brief, summaryInput.filesOverview, summaryInput.nameStatus, strategy)
+                : generated.brief;
+            setRenderedBrief(renderBrief({
+                briefType,
+                brief,
+                source,
+                strategy: strategy,
+                filesOverview: summaryInput.filesOverview,
+                nameStatus: summaryInput.nameStatus
+            }));
             setSummarySource(source);
             setSummaryStrategy(strategy);
             setGenerationMode(generated.mode);
             setPhaseTimings(nextPhaseTimings);
             setMenuIndex(0);
+            await writePipelineLog('cli.generate.complete', {
+                briefType,
+                source,
+                strategy,
+                mode: generated.mode,
+                bypassBriefCache: Boolean(options.bypassBriefCache),
+                phaseTimings: nextPhaseTimings
+            });
         }
         catch (cause) {
-            setSuggestion(null);
+            setRenderedBrief(null);
             setSummarySource(null);
             setSummaryStrategy(null);
             setGenerationMode(null);
             setPhaseTimings([]);
             setError(cause instanceof Error ? cause.message : String(cause));
+            await writePipelineLog('cli.generate.error', {
+                briefType,
+                bypassBriefCache: Boolean(options.bypassBriefCache),
+                message: cause instanceof Error ? cause.message : String(cause)
+            });
         }
         finally {
             setCurrentPhase(null);
@@ -763,8 +806,12 @@ function App() {
         }
     }, []);
     useEffect(() => {
-        runGenerate();
-    }, [runGenerate]);
+        if (props.initialBriefType) {
+            runGenerate(props.initialBriefType);
+            return;
+        }
+        setLoading(false);
+    }, [props.initialBriefType, runGenerate]);
     useEffect(() => {
         if (!loading) {
             setLoadingFrame(0);
@@ -778,13 +825,16 @@ function App() {
         };
     }, [loading]);
     const confirmAndPush = useCallback(async () => {
-        if (!suggestion)
+        if (!renderedBrief || !selectedBriefType || !allowsGitExecution(selectedBriefType))
+            return;
+        const commitPayload = getCommitPayload(renderedBrief);
+        if (!commitPayload)
             return;
         setSubmitting(true);
         setError(null);
         setSteps(createInitialSteps());
         try {
-            await applyCommitAndPush({ title: suggestion.title, bullets: suggestion.bullets }, (step) => {
+            await applyCommitAndPush(commitPayload, (step) => {
                 setSteps((current) => current.map((item) => (item.name === step.name ? { ...item, status: step.status } : item)));
             });
             exit();
@@ -795,64 +845,100 @@ function App() {
         finally {
             setSubmitting(false);
         }
-    }, [exit, suggestion]);
+    }, [exit, renderedBrief, selectedBriefType]);
     const tips = useMemo(() => ['up/down: move', 'enter: select', 'r: regenerate', 'q: cancel'], []);
+    const briefOptions = useMemo(() => getBriefOptions(), []);
     useInput((input, key) => {
         if (loading || submitting)
             return;
+        if (!selectedBriefType) {
+            if (input === 'q') {
+                exit();
+                return;
+            }
+            if (key.upArrow) {
+                setBriefMenuIndex((current) => (current - 1 + briefOptions.length) % briefOptions.length);
+                return;
+            }
+            if (key.downArrow) {
+                setBriefMenuIndex((current) => (current + 1) % briefOptions.length);
+                return;
+            }
+            if (key.return) {
+                runGenerate(briefOptions[briefMenuIndex].type);
+            }
+            return;
+        }
         if (input === 'q') {
             exit();
             return;
         }
         if (input === 'r') {
-            runGenerate();
+            runGenerate(selectedBriefType, { bypassBriefCache: true });
             return;
         }
         if (key.upArrow) {
-            setMenuIndex((current) => (current - 1 + MENU_OPTIONS.length) % MENU_OPTIONS.length);
+            setMenuIndex((current) => (current - 1 + RESULT_MENU_OPTIONS.length) % RESULT_MENU_OPTIONS.length);
             return;
         }
         if (key.downArrow) {
-            setMenuIndex((current) => (current + 1) % MENU_OPTIONS.length);
+            setMenuIndex((current) => (current + 1) % RESULT_MENU_OPTIONS.length);
             return;
         }
         if (key.return) {
-            const option = MENU_OPTIONS[menuIndex];
+            const option = RESULT_MENU_OPTIONS[menuIndex];
             if (option === 'Confirm') {
-                confirmAndPush();
+                if (allowsGitExecution(selectedBriefType)) {
+                    confirmAndPush();
+                    return;
+                }
+                exit();
                 return;
             }
             if (option === 'Regenerate') {
-                runGenerate();
+                runGenerate(selectedBriefType, { bypassBriefCache: true });
+                return;
+            }
+            if (option === 'Back') {
+                setRenderedBrief(null);
+                setSelectedBriefType(null);
+                setMenuIndex(0);
                 return;
             }
             exit();
         }
     });
-    const content = [h(Text, { key: 'title', color: 'cyan' }, 'gai · AI Commit Assistant')];
+    const content = [h(Text, { key: 'title', color: 'cyan' }, 'gai · AI Workspace Brief Assistant')];
     if (loading)
         content.push(h(Text, { key: 'loading', color: 'yellow' }, getLoadingMessage(currentPhase, loadingFrame)));
     if (loading && currentPhase)
         content.push(h(Text, { key: 'phase-loading', color: 'gray' }, `当前阶段: ${getPhaseLabel(currentPhase)}`));
     if (submitting)
         content.push(h(Text, { key: 'submitting', color: 'yellow' }, '正在执行 git add / git commit / git push...'));
-    if (!loading && suggestion) {
+    if (!loading && !selectedBriefType) {
+        content.push(h(Box, { key: 'brief-picker', flexDirection: 'column', marginTop: 1 }, [
+            h(Text, { key: 'brief-picker-title', color: 'green' }, '请选择要生成的 brief 类型'),
+            ...briefOptions.map((item, index) => h(BriefMenuItem, { key: item.type, option: item.type, selected: index === briefMenuIndex })),
+            h(Text, { key: 'brief-picker-tips', color: 'gray' }, '默认分析范围: staged + working tree + untracked files')
+        ]));
+    }
+    if (!loading && renderedBrief) {
         const suggestionNodes = [
-            h(Text, { key: 'proposal-label', color: 'green' }, '建议标题'),
-            h(Text, { key: 'proposal-title' }, suggestion.title),
-            h(Text, { key: 'source', color: 'gray' }, `来源: ${summarySource === 'staged' ? '暂存区改动' : '工作区改动'}`),
+            h(Text, { key: 'proposal-label', color: 'green' }, renderedBrief.title),
+            h(Text, { key: 'source', color: 'gray' }, `来源: ${getSourceLabel(summarySource)}`),
             h(Text, { key: 'strategy', color: 'gray' }, `策略: ${summaryStrategy === 'incremental' ? '增量' : summaryStrategy === 'contextual' ? '增量 + 上下文' : '压缩摘要'}`),
             h(Text, { key: 'provider', color: 'gray' }, `Provider: ${getProviderLabel()}`),
             h(Text, { key: 'generation-mode', color: generationMode === 'model' ? 'green' : generationMode === 'zhipu-reasoning' ? 'cyan' : 'yellow' }, `生成方式: ${getGenerationModeLabel(generationMode)}`),
             h(Text, { key: 'timings-title', color: 'green' }, '阶段耗时'),
             ...phaseTimings.map((item) => h(Text, { key: `timing-${item.name}`, color: 'gray' }, `${getPhaseLabel(item.name)}: ${item.durationMs}ms`)),
             h(Text, { key: 'timings-total', color: 'gray' }, `总计: ${getTotalPhaseDuration(phaseTimings)}ms`),
-            h(Text, { key: 'summary-label', color: 'green' }, '变更摘要')
+            h(Text, { key: 'summary-label', color: 'green' }, '内容预览')
         ];
-        suggestion.bullets.forEach((line, index) => {
-            suggestionNodes.push(h(Text, { key: `bullet-${index}` }, `- ${line}`));
+        renderedBrief.lines.forEach((line, index) => {
+            suggestionNodes.push(h(Text, { key: `brief-line-${index}` }, line));
         });
-        suggestionNodes.push(h(Box, { key: 'menu', flexDirection: 'column', marginTop: 1 }, MENU_OPTIONS.map((option, index) => h(MenuItem, { key: option, option, selected: index === menuIndex }))));
+        suggestionNodes.push(h(Box, { key: 'menu', flexDirection: 'column', marginTop: 1 }, RESULT_MENU_OPTIONS.map((option, index) => h(MenuItem, { key: option, option, selected: index === menuIndex }))));
+        suggestionNodes.push(h(Text, { key: 'brief-note', color: 'gray' }, renderedBrief.allowsGitExecution ? 'Confirm 将执行 git add -A / git commit / git push' : 'Confirm 仅接受当前结果，不会修改 Git 状态'));
         suggestionNodes.push(h(Text, { key: 'tips', color: 'gray' }, tips.join(' | ')));
         content.push(h(Box, { key: 'suggestion-box', flexDirection: 'column', marginTop: 1 }, suggestionNodes));
     }
@@ -868,36 +954,36 @@ function App() {
     return h(Box, { flexDirection: 'column', padding: 1 }, content);
 }
 async function main() {
-    const command = process.argv[2];
-    if (command === 'install') {
+    const resolvedCommand = resolveCliCommand(process.argv.slice(2));
+    if (resolvedCommand.kind === 'install') {
         await installToZshrc();
         return;
     }
-    if (command === 'doctor') {
-        if (process.argv[3] === '--token') {
-            render(h(TokenDoctorApp));
-            return;
-        }
+    if (resolvedCommand.kind === 'doctor-token') {
+        render(h(TokenDoctorApp));
+        return;
+    }
+    if (resolvedCommand.kind === 'doctor') {
         await printDoctor();
         return;
     }
-    if (command === 'config') {
+    if (resolvedCommand.kind === 'config') {
         await runConfig();
         return;
     }
-    if (command === 'profiles') {
+    if (resolvedCommand.kind === 'profiles') {
         await printProfiles();
         return;
     }
-    if (command === 'use') {
-        await useProfile(process.argv[3]);
+    if (resolvedCommand.kind === 'use') {
+        await useProfile(resolvedCommand.profileName);
         return;
     }
-    if (command === '--help' || command === '-h') {
+    if (resolvedCommand.kind === 'help') {
         printHelp();
         return;
     }
-    render(h(App));
+    render(h(App, { initialBriefType: resolvedCommand.initialBriefType }));
 }
 main().catch((error) => {
     process.stderr.write(`Error: ${error instanceof Error ? error.message : String(error)}\n`);

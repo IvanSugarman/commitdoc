@@ -93,18 +93,20 @@ export function getResolvedProviderConfig() {
 /**
  * @description 根据当前 Provider 生成提交建议。
  * @param {string} prompt 输入提示词。
+ * @param {BriefType} briefType brief 类型。
+ * @param {import('./openai-compatible.js').GenerationOptions} [options] 生成选项。
  * @return {Promise<import('./openai-compatible.js').GenerationResult>} 提交建议与生成模式。
  */
-export async function generateSuggestion(prompt) {
+export async function generateSuggestion(prompt, briefType, options = {}) {
     const provider = getProviderName();
     if (provider === 'ark') {
-        return generateArkSuggestion(prompt);
+        return generateArkSuggestion(prompt, briefType, options);
     }
     if (provider === 'openai') {
-        return generateOpenAISuggestion(prompt);
+        return generateOpenAISuggestion(prompt, briefType, options);
     }
     if (provider === 'openai-compatible') {
-        return generateWithOpenAICompatible(getResolvedProviderConfig(), prompt);
+        return generateWithOpenAICompatible(getResolvedProviderConfig(), prompt, briefType, options);
     }
-    return generateZhipuSuggestion(prompt);
+    return generateZhipuSuggestion(prompt, briefType, options);
 }

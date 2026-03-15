@@ -1,4 +1,6 @@
 node_modules
 .env
 .gai-debug
+.gai-cache
 .DS_Store
+dist

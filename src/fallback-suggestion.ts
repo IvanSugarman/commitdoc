@@ -1,3 +1,6 @@
+import type {BriefType} from './commands.js';
+import type {CommitFlowBrief, CommitSummaryBrief, CommitTitleBrief, CrDescriptionBrief, GeneratedBrief} from './briefs.js';
+
 /**
  * @typedef {Object} CommitSuggestion
  * @property {'feat'|'fix'|'chore'} type 提交类型。
@@ -59,6 +62,16 @@ const PATCH_STOP_WORDS = new Set([
  * @return {CommitSuggestion} 结构化提交建议。
  */
 export function parseSuggestion(raw) {
+  return parseGeneratedBrief(raw, 'commit');
+}
+
+/**
+ * @description 解析指定 brief 的模型返回 JSON。
+ * @param {string} raw 模型原始文本。
+ * @param {BriefType} briefType brief 类型。
+ * @return {GeneratedBrief} 结构化 brief。
+ */
+export function parseGeneratedBrief(raw: string, briefType: BriefType): GeneratedBrief {
   const normalized = normalizeRawResponse(raw);
   const candidate = extractJsonCandidate(normalized);
   const parsed = JSON.parse(candidate);
@@ -67,8 +80,47 @@ export function parseSuggestion(raw) {
     throw new Error('Invalid model response: not an object');
   }
 
-  const data = normalizeSuggestionObject(/** @type {Record<string, unknown>} */ (parsed));
+  if (briefType === 'commit') {
+    const data = normalizeSuggestionObject(/** @type {Record<string, unknown>} */ (parsed));
+    return parseCommitFlowBrief(data);
+  }
 
+  if (briefType === 'commit-title') {
+    return parseCommitTitleBrief(/** @type {Record<string, unknown>} */ (parsed));
+  }
+
+  if (briefType === 'commit-summary') {
+    return parseCommitSummaryBrief(/** @type {Record<string, unknown>} */ (parsed));
+  }
+
+  return parseCrDescriptionBrief(/** @type {Record<string, unknown>} */ (parsed));
+}
+
+/**
+ * @description 规整模型返回对象，兼容不同字段命名与数组格式。
+ * @param {Record<string, unknown>} parsed 原始对象。
+ * @return {Record<string, unknown>} 规整后的对象。
+ */
+function normalizeSuggestionObject(parsed) {
+  const nested = getNestedSuggestion(parsed);
+  const rawTitle = readFirstStringField(nested, ['title', 'subject', 'summary', 'message']);
+  const rawType = readFirstStringField(nested, ['type', 'commit_type', 'kind', 'category']) || inferTypeFromTitle(rawTitle);
+  const rawSubject = readFirstStringField(nested, ['subject', 'title', 'summary', 'message']);
+  const rawBullets = nested.bullets ?? nested.points ?? nested.items ?? nested.changes ?? nested.highlights;
+
+  return {
+    type: normalizeType(rawType),
+    subject: normalizeSubject(rawSubject),
+    bullets: normalizeBullets(rawBullets)
+  };
+}
+
+/**
+ * @description 解析提交流程 brief。
+ * @param {Record<string, unknown>} data 规整后的对象。
+ * @return {CommitFlowBrief} 提交流程 brief。
+ */
+function parseCommitFlowBrief(data): CommitFlowBrief {
   if (!ALLOWED_TYPES.has(String(data.type))) {
     throw new Error('Invalid model response: unsupported type');
   }
@@ -85,30 +137,79 @@ export function parseSuggestion(raw) {
     .filter((item) => typeof item === 'string')
     .map((item) => item.trim())
     .filter(Boolean)
-    .slice(0, 4);
+    .slice(0, 6);
 
   return {
-    type: /** @type {'feat'|'fix'|'chore'} */ (data.type),
-    subject: data.subject.trim().slice(0, 50),
+    briefType: 'commit',
+    title: `${data.type}: ${data.subject.trim().slice(0, 50)}`,
     bullets
   };
 }
 
 /**
- * @description 规整模型返回对象，兼容不同字段命名与数组格式。
+ * @description 解析 commit title brief。
  * @param {Record<string, unknown>} parsed 原始对象。
- * @return {Record<string, unknown>} 规整后的对象。
+ * @return {CommitTitleBrief} commit title brief。
  */
-function normalizeSuggestionObject(parsed) {
+function parseCommitTitleBrief(parsed): CommitTitleBrief {
   const nested = getNestedSuggestion(parsed);
-  const rawType = readFirstStringField(nested, ['type', 'commit_type', 'kind', 'category']);
-  const rawSubject = readFirstStringField(nested, ['subject', 'title', 'summary', 'message']);
-  const rawBullets = nested.bullets ?? nested.points ?? nested.items ?? nested.changes ?? nested.highlights;
+  const title = readFirstStringField(nested, ['title', 'subject', 'message', 'summary']);
+  const type = normalizeType(readFirstStringField(nested, ['type', 'commit_type', 'kind', 'category']));
+  const normalizedTitle = normalizeTitleOutput(title, type);
+
+  if (!normalizedTitle) {
+    throw new Error('Invalid model response: missing title');
+  }
 
   return {
-    type: normalizeType(rawType),
-    subject: normalizeSubject(rawSubject),
-    bullets: normalizeBullets(rawBullets)
+    briefType: 'commit-title',
+    title: normalizedTitle
+  };
+}
+
+/**
+ * @description 解析 commit summary brief。
+ * @param {Record<string, unknown>} parsed 原始对象。
+ * @return {CommitSummaryBrief} commit summary brief。
+ */
+function parseCommitSummaryBrief(parsed): CommitSummaryBrief {
+  const nested = getNestedSuggestion(parsed);
+  const bullets = normalizeBullets(nested.bullets ?? nested.points ?? nested.items ?? nested.changes ?? nested.highlights).slice(0, 6);
+
+  if (bullets.length === 0) {
+    throw new Error('Invalid model response: missing bullets');
+  }
+
+  return {
+    briefType: 'commit-summary',
+    bullets
+  };
+}
+
+/**
+ * @description 解析 CR 描述 brief。
+ * @param {Record<string, unknown>} parsed 原始对象。
+ * @return {CrDescriptionBrief} CR 描述 brief。
+ */
+function parseCrDescriptionBrief(parsed): CrDescriptionBrief {
+  const nested = getNestedSuggestion(parsed);
+  const changePurpose = readFirstStringField(nested, ['changePurpose', 'purpose', 'summary']);
+  const reviewerFocus = readFirstStringField(nested, ['reviewerFocus', 'reviewFocus', 'focus']);
+  const testingValidation = readFirstStringField(nested, ['testingValidation', 'testing', 'validation']);
+  const keyChanges = normalizeBullets(nested.keyChanges ?? nested.changes ?? nested.highlights);
+  const impactScope = normalizeBullets(nested.impactScope ?? nested.scope ?? nested.impacts);
+
+  if (!changePurpose) {
+    throw new Error('Invalid model response: missing changePurpose');
+  }
+
+  return {
+    briefType: 'cr-description',
+    changePurpose,
+    keyChanges: keyChanges.slice(0, 6),
+    impactScope: impactScope.slice(0, 6),
+    reviewerFocus,
+    testingValidation
   };
 }
 
@@ -169,6 +270,16 @@ function normalizeType(rawType) {
 }
 
 /**
+ * @description 从 conventional commit title 中提取类型。
+ * @param {string} rawTitle 原始标题。
+ * @return {string} 推断出的提交类型。
+ */
+function inferTypeFromTitle(rawTitle) {
+  const matched = rawTitle.trim().match(/^(feat|fix|chore)\s*:/i);
+  return matched?.[1] ?? '';
+}
+
+/**
  * @description 规范化标题主体。
  * @param {string} rawSubject 原始标题。
  * @return {string} 规整后的标题。
@@ -178,6 +289,31 @@ function normalizeSubject(rawSubject) {
     .replace(/^[A-Za-z]+:\s*/, '')
     .replace(/^["'`]+|["'`]+$/g, '')
     .trim();
+}
+
+/**
+ * @description 规整 title 输出。
+ * @param {string} rawTitle 原始 title。
+ * @param {'feat'|'fix'|'chore'|''} type 提交类型。
+ * @return {string} 规整后的 title。
+ */
+function normalizeTitleOutput(rawTitle, type) {
+  const normalized = rawTitle
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .trim();
+  if (!normalized) {
+    return '';
+  }
+
+  if (/^(feat|fix|chore):\s*/i.test(normalized)) {
+    return normalized;
+  }
+
+  if (type) {
+    return `${type}: ${normalized}`;
+  }
+
+  return normalized;
 }
 
 /**
@@ -294,6 +430,18 @@ function parseSemanticHints(hints) {
 }
 
 /**
+ * @description 解析 IR 变更行。
+ * @param {string} irChanges IR 变更文本。
+ * @return {string[]} IR 变更数组。
+ */
+function parseIRChanges(irChanges) {
+  return irChanges
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+/**
  * @description 从语义提示中提取实体展示名。
  * @param {string[]} hints 语义提示数组。
  * @return {string} 实体展示名。
@@ -338,9 +486,10 @@ function classifyHint(hint) {
  * @description 基于语义提示生成结构化提交建议。
  * @param {string[]} hints 语义提示数组。
  * @param {'feat'|'fix'|'chore'} type 提交类型。
+ * @param {number} [limit] 最大要点数。
  * @return {CommitSuggestion | null} 结构化提交建议。
  */
-function buildStructuredSuggestionFromHints(hints, type) {
+function buildStructuredSuggestionFromHints(hints, type, limit = 4) {
   if (hints.length === 0) {
     return null;
   }
@@ -384,7 +533,7 @@ function buildStructuredSuggestionFromHints(hints, type) {
   return {
     type,
     subject: subject.slice(0, 30),
-    bullets: bullets.slice(0, 4)
+    bullets: bullets.slice(0, limit)
   };
 }
 
@@ -647,7 +796,7 @@ function inferSubjectFromHints(hints, type) {
  * @param {string} focus 主题焦点。
  * @return {string[]} 中文摘要要点。
  */
-function inferBullets(files, lines, keywords, focus) {
+function inferBullets(files, lines, keywords, focus, limit = 4) {
   /** @type {string[]} */
   const bullets = [];
   const fileNames = getTopFileNames(files, 3);
@@ -684,7 +833,7 @@ function inferBullets(files, lines, keywords, focus) {
     bullets.push(`改动主要落在 ${fileNames.join('、')}，但语义焦点保持在 ${focus}`);
   }
 
-  return Array.from(new Set(bullets)).slice(0, 4);
+  return Array.from(new Set(bullets)).slice(0, limit);
 }
 
 /**
@@ -693,15 +842,38 @@ function inferBullets(files, lines, keywords, focus) {
  * @param {'feat'|'fix'|'chore'} type 提交类型。
  * @return {string[]} 摘要要点。
  */
-function inferBulletsFromHints(hints, type) {
-  const structured = buildStructuredSuggestionFromHints(hints, type);
+function inferBulletsFromHints(hints, type, limit = 4) {
+  const structured = buildStructuredSuggestionFromHints(hints, type, limit);
   if (structured) {
-    return structured.bullets;
+    return structured.bullets.slice(0, limit);
   }
 
   return hints
     .map((item) => item.replace(/^新增对应/, '新增'))
-    .slice(0, 4);
+    .slice(0, limit);
+}
+
+/**
+ * @description 合并候选要点，并补齐到目标下限。
+ * @param {string[]} primary 高优先级要点。
+ * @param {string[]} secondary 次级补充要点。
+ * @param {number} minCount 最小条数。
+ * @param {number} maxCount 最大条数。
+ * @param {string} fallbackItem 兜底条目。
+ * @return {string[]} 要点列表。
+ */
+function mergeBulletCandidates(primary, secondary, minCount, maxCount, fallbackItem) {
+  const merged = Array.from(new Set([...primary, ...secondary].filter(Boolean)));
+
+  if (merged.length >= minCount) {
+    return merged.slice(0, maxCount);
+  }
+
+  if (fallbackItem) {
+    merged.push(fallbackItem);
+  }
+
+  return Array.from(new Set(merged)).slice(0, Math.max(minCount, 1));
 }
 
 /**
@@ -711,23 +883,262 @@ function inferBulletsFromHints(hints, type) {
  * @return {CommitSuggestion} 本地推断的提交建议。
  */
 export function buildFallbackSuggestion(prompt, reasoning) {
-  const files = parseFileSummary(extractSection(prompt, 'FILE_SUMMARY'));
-  const patch = extractSection(prompt, 'PATCH');
+  const brief = buildFallbackBrief(prompt, reasoning, 'commit');
+  if (brief.briefType !== 'commit') {
+    throw new Error('Fallback commit brief generation failed');
+  }
+
+  const [type, ...subjectParts] = brief.title.split(':');
+  return {
+    type: normalizeType(type.trim()) || 'chore',
+    subject: subjectParts.join(':').trim(),
+    bullets: brief.bullets
+  };
+}
+
+/**
+ * @description 构建指定 brief 的本地兜底结果。
+ * @param {string} prompt 完整提示词。
+ * @param {string} reasoning 模型 reasoning 文本。
+ * @param {BriefType} briefType brief 类型。
+ * @return {GeneratedBrief} 本地推断的 brief。
+ */
+export function buildFallbackBrief(prompt: string, reasoning: string, briefType: BriefType): GeneratedBrief {
+  const fileSummarySection = extractSection(prompt, 'FILE_SUMMARY') || extractSection(prompt, 'KEY_FILES') || extractSection(prompt, 'FILES_OVERVIEW') || extractSection(prompt, 'NAME_STATUS');
+  const nameStatusSection = extractSection(prompt, 'NAME_STATUS') || extractSection(prompt, 'KEY_FILES') || extractSection(prompt, 'FILES_OVERVIEW');
+  const outputProfileSection = extractSection(prompt, 'OUTPUT_PROFILE');
+  const themeChecklistSection = extractSection(prompt, 'THEME_CHECKLIST');
+  const actionChecklistSection = extractSection(prompt, 'ACTION_CHECKLIST');
+  const reviewerFocusTemplateSection = extractSection(prompt, 'REVIEWER_FOCUS_TEMPLATE');
+  const outputLimits = resolveOutputLimits(outputProfileSection, extractSection(prompt, 'IR_OVERVIEW'));
+  const files = parseFileSummary(fileSummarySection);
+  const patch = extractSection(prompt, 'PATCH') || extractSection(prompt, 'PATCH_SUMMARY');
   const semanticHints = parseSemanticHints(extractSection(prompt, 'SEMANTIC_HINTS'));
   const groupSummary = extractSection(prompt, 'GROUP_SUMMARY');
+  const irChanges = parseIRChanges(extractSection(prompt, 'IR_CHANGES'));
+  const irRisks = extractSection(prompt, 'IR_RISKS');
   const lines = getMeaningfulPatchLines(patch);
   const keywords = getTopKeywords(collectPatchKeywords(lines));
-  const sourceText = [semanticHints.join('\n'), groupSummary, lines.join('\n'), reasoning].filter(Boolean).join('\n');
+  const themes = themeChecklistSection
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const actionChecklist = actionChecklistSection
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const sourceText = [semanticHints.join('\n'), groupSummary, irChanges.join('\n'), irRisks, lines.join('\n'), reasoning].filter(Boolean).join('\n');
   const type = inferType(sourceText);
   const focus = inferFocus(files, keywords);
-  const hintSubject = inferSubjectFromHints(semanticHints, type);
-  const bullets = semanticHints.length > 0 ? inferBulletsFromHints(semanticHints, type) : inferBullets(files, lines, keywords, focus);
+  const synthesizedHints = semanticHints.length > 0 ? semanticHints : synthesizeHintsFromIR(irChanges, irRisks);
+  const hintSubject = inferSubjectFromHints(synthesizedHints, type);
+  const actionBullets = actionChecklist.slice(0, outputLimits.summaryMax);
+  const hintBullets = synthesizedHints.length > 0
+    ? inferBulletsFromHints(synthesizedHints, type, outputLimits.summaryMax)
+    : [];
+  const inferredBullets = inferBullets(files, lines, keywords, focus, outputLimits.summaryMax);
+  const bullets = mergeBulletCandidates(
+    actionBullets,
+    [...hintBullets, ...inferredBullets],
+    outputLimits.summaryMin,
+    outputLimits.summaryMax,
+    `调整 gai ${focus}`
+  );
+  const title = `${type}: ${hintSubject || inferSubject(files, keywords, type)}`;
+
+  if (briefType === 'commit') {
+    return {
+      briefType: 'commit',
+      title,
+      bullets: bullets.length > 0 ? bullets : [`调整 gai ${focus}`]
+    };
+  }
+
+  if (briefType === 'commit-title') {
+    return {
+      briefType: 'commit-title',
+      title
+    };
+  }
+
+  if (briefType === 'commit-summary') {
+    return {
+      briefType: 'commit-summary',
+      bullets: bullets.length > 0 ? bullets.slice(0, outputLimits.summaryMax) : [`调整 gai ${focus}`]
+    };
+  }
+
+  const impactScope = inferImpactScope(files, irChanges, outputLimits.impactScopeMax);
 
   return {
-    type,
-    subject: hintSubject || inferSubject(files, keywords, type),
-    bullets: bullets.length > 0 ? bullets : [`调整 gai ${focus}`]
+    briefType: 'cr-description',
+    changePurpose: buildFallbackChangePurpose(focus, themes),
+    keyChanges: bullets.length > 0
+      ? bullets.slice(0, outputLimits.keyChangesMax)
+      : [`总结当前工作区中与 ${focus} 相关的主要改动。`],
+    impactScope: mergeBulletCandidates(
+      impactScope,
+      irChanges.map((line) => line.split('\t')[0] || '').filter(Boolean),
+      outputLimits.impactScopeMin,
+      outputLimits.impactScopeMax,
+      focus
+    ),
+    reviewerFocus: buildFallbackReviewerFocus(reviewerFocusTemplateSection, themes, irRisks),
+    testingValidation: /(test|spec)\./i.test(nameStatusSection)
+      ? '当前工作区包含测试文件改动，请确认更新后的测试仍覆盖目标行为。'
+      : '当前工作区未检测到明确的测试文件改动，建议补充人工验证。'
   };
+}
+
+/**
+ * @description 推断影响范围，优先使用文件摘要，其次回退到 IR。
+ * @param {FileSummaryItem[]} files 文件摘要。
+ * @param {string[]} irChanges IR 变更。
+ * @return {string[]} 影响范围列表。
+ */
+function inferImpactScope(files, irChanges, limit = 4) {
+  const filePaths = files
+    .slice(0, limit)
+    .map((item) => item.path)
+    .filter(Boolean);
+
+  if (filePaths.length > 0) {
+    return filePaths;
+  }
+
+  return irChanges
+    .slice(0, limit)
+    .map((line) => line.split('\t')[0] || '')
+    .filter(Boolean);
+}
+
+/**
+ * @description 解析输出规格，供 fallback 对齐 prompt 的条数要求。
+ * @param {string} outputProfileSection 输出规格区块。
+ * @param {string} irOverviewSection IR 概览区块。
+ * @return {{summaryMax: number; keyChangesMax: number; impactScopeMax: number}} 输出上限。
+ */
+function resolveOutputLimits(outputProfileSection, irOverviewSection) {
+  const explicitSummaryMin = readNumericField(outputProfileSection, 'summaryMin');
+  const explicitSummaryMax = readNumericField(outputProfileSection, 'summaryMax');
+  const explicitKeyChangesMin = readNumericField(outputProfileSection, 'keyChangesMin');
+  const explicitKeyChangesMax = readNumericField(outputProfileSection, 'keyChangesMax');
+  const explicitImpactScopeMin = readNumericField(outputProfileSection, 'impactScopeMin');
+  const explicitImpactScopeMax = readNumericField(outputProfileSection, 'impactScopeMax');
+
+  if (explicitSummaryMin || explicitSummaryMax || explicitKeyChangesMin || explicitKeyChangesMax || explicitImpactScopeMin || explicitImpactScopeMax) {
+    return {
+      summaryMin: explicitSummaryMin || 2,
+      summaryMax: explicitSummaryMax || 4,
+      keyChangesMin: explicitKeyChangesMin || explicitSummaryMin || 2,
+      keyChangesMax: explicitKeyChangesMax || explicitSummaryMax || 4,
+      impactScopeMin: explicitImpactScopeMin || 2,
+      impactScopeMax: explicitImpactScopeMax || 4
+    };
+  }
+
+  const filesChanged = readNumericField(irOverviewSection, 'filesChanged');
+  const addedLines = readNumericField(irOverviewSection, 'addedLines');
+  const deletedLines = readNumericField(irOverviewSection, 'deletedLines');
+  const changedLines = addedLines + deletedLines;
+
+  if (filesChanged >= 18 || changedLines >= 700) {
+    return {summaryMin: 4, summaryMax: 6, keyChangesMin: 4, keyChangesMax: 6, impactScopeMin: 3, impactScopeMax: 5};
+  }
+
+  if (filesChanged >= 8 || changedLines >= 220) {
+    return {summaryMin: 3, summaryMax: 4, keyChangesMin: 3, keyChangesMax: 4, impactScopeMin: 2, impactScopeMax: 4};
+  }
+
+  return {summaryMin: 2, summaryMax: 3, keyChangesMin: 2, keyChangesMax: 3, impactScopeMin: 2, impactScopeMax: 3};
+}
+
+/**
+ * @description 构建 fallback 版变更目的，优先回答“为什么做”。
+ * @param {string} focus 焦点主题。
+ * @param {string[]} themes 主题清单。
+ * @return {string} 变更目的。
+ */
+function buildFallbackChangePurpose(focus, themes) {
+  if (themes.length >= 3) {
+    return `这次改动主要为了解决 ${themes.slice(0, 3).join('、')} 之间的职责分散问题，统一 ${focus} 相关生成链路的边界与表达。`;
+  }
+
+  return `这次改动主要围绕 ${focus} 展开，目的是让相关工程变更更清晰、更可理解。`;
+}
+
+/**
+ * @description 构建 fallback 版评审关注点。
+ * @param {string[]} themes 主题清单。
+ * @param {string} irRisks 风险文本。
+ * @return {string} 评审关注点。
+ */
+function buildFallbackReviewerFocus(template, themes, irRisks) {
+  if (template.trim()) {
+    return template.trim();
+  }
+
+  const firstRisk = irRisks.split('\n').filter(Boolean)[0];
+  if (firstRisk) {
+    return firstRisk;
+  }
+
+  if (themes.length >= 2) {
+    return `请重点关注 ${themes.slice(0, 2).join(' 与 ')} 之间的接口契约和行为一致性。`;
+  }
+
+  return '请重点关注关键模块的行为一致性以及集成影响。';
+}
+
+/**
+ * @description 从区块中读取数字字段。
+ * @param {string} text 区块文本。
+ * @param {string} field 字段名。
+ * @return {number} 数值。
+ */
+function readNumericField(text, field) {
+  const value = text.match(new RegExp(`${field}=(\\d+)`))?.[1];
+  return value ? Number(value) : 0;
+}
+
+/**
+ * @description 基于 IR 生成兜底语义提示。
+ * @param {string[]} irChanges IR 变更数组。
+ * @param {string} irRisks IR 风险文本。
+ * @return {string[]} 语义提示数组。
+ */
+function synthesizeHintsFromIR(irChanges, irRisks) {
+  const hints = [];
+  const roles = new Set();
+
+  irChanges.forEach((line) => {
+    const role = line.match(/\trole=([a-z-]+)/)?.[1];
+    if (role) {
+      roles.add(role);
+    }
+  });
+
+  if (roles.has('script')) {
+    hints.push('核心实现逻辑发生调整');
+  }
+
+  if (roles.has('type')) {
+    hints.push('涉及类型定义或接口契约变化');
+  }
+
+  if (roles.has('config')) {
+    hints.push('包含配置或依赖相关调整');
+  }
+
+  if (roles.has('test')) {
+    hints.push('包含测试覆盖或验证逻辑调整');
+  }
+
+  if (irRisks) {
+    hints.push('需要关注行为一致性与潜在回归风险');
+  }
+
+  return hints.slice(0, 4);
 }
 
 /**
@@ -747,14 +1158,35 @@ function extractReasoningHints(reasoning) {
  * @return {CommitSuggestion} 提交建议。
  */
 export function buildSuggestionFromReasoning(prompt, reasoning) {
+  const brief = buildBriefFromReasoning(prompt, reasoning, 'commit');
+  if (brief.briefType !== 'commit') {
+    throw new Error('Reasoning commit brief generation failed');
+  }
+
+  const [type, ...subjectParts] = brief.title.split(':');
+  return {
+    type: normalizeType(type.trim()) || 'chore',
+    subject: subjectParts.join(':').trim(),
+    bullets: brief.bullets
+  };
+}
+
+/**
+ * @description 基于 reasoning 文本构建指定 brief。
+ * @param {string} prompt 完整提示词。
+ * @param {string} reasoning 模型 reasoning 文本。
+ * @param {BriefType} briefType brief 类型。
+ * @return {GeneratedBrief} brief 输出。
+ */
+export function buildBriefFromReasoning(prompt: string, reasoning: string, briefType: BriefType): GeneratedBrief {
   const reasoningHints = extractReasoningHints(reasoning);
   if (reasoningHints.length === 0) {
-    return buildFallbackSuggestion(prompt, reasoning);
+    return buildFallbackBrief(prompt, reasoning, briefType);
   }
 
   const mergedPrompt = reasoningHints.length > 0
     ? `${prompt}\n\n[SEMANTIC_HINTS]\n${reasoningHints.join('\n')}`
     : prompt;
 
-  return buildFallbackSuggestion(mergedPrompt, reasoning);
+  return buildFallbackBrief(mergedPrompt, reasoning, briefType);
 }

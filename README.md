@@ -1,6 +1,6 @@
 # gai
 
-Generate commit title and summary from git changes, then choose to confirm/regenerate/cancel in an Ink TUI. Confirm action will run `git add -A && git commit && git push`.
+Generate workspace briefs from git changes in an Ink TUI. The CLI can generate commit title, commit summary, and CR description. Commit flow can confirm and run `git add -A && git commit && git push`.
 
 ## Install
 
@@ -9,11 +9,23 @@ npm install
 npm link
 ```
 
+## Validate
+
+```bash
+npm run typecheck
+npm test
+npm run verify
+```
+
 ## Usage
 
 ```bash
 gai profiles
 gai
+gai commit
+gai brief commit-title
+gai brief commit-summary
+gai brief cr-description
 ```
 
 ## Profile Env
@@ -74,7 +86,7 @@ gai doctor --token
 
 This command reports:
 
-- current source: staged or working tree
+- current source: mixed workspace, staged, or working tree
 - selected strategy: incremental, contextual, or compressed
 - changed file count and ignored file count
 - patch / prompt character size
@@ -142,18 +154,41 @@ GAI_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 
 ## Behavior
 
-- Prioritizes staged changes; if none exist, falls back to working tree changes.
+- Default input source is mixed workspace:
+  - staged changes
+  - unstaged working tree changes
+  - untracked files
 - Uses adaptive token control:
   - small changes use incremental patch only
   - medium changes add file summary and selected context
   - large changes compress patch sections and ignore low-value noise files first
-- Commit title and summary are generated in Chinese, while commit type keywords remain English, for example: `feat: 切换默认模型为 GLM 4.7`.
+- `gai` first lets you choose which brief type to generate.
+- `gai commit` generates commit title and summary in Chinese, while commit type keywords remain English, for example: `feat: 切换默认模型为 GLM 4.7`.
+- `gai brief commit-title` only generates commit title.
+- `gai brief commit-summary` only generates commit summary.
+- `gai brief cr-description` generates a structured CR description preview.
 - You can choose:
-  - `Confirm`: run add + commit + push.
+  - `Confirm`: accept current result. In commit flow it will run add + commit + push.
   - `Regenerate`: call model again.
+  - `Back`: return to brief selection.
   - `Cancel`: exit without changes.
 - During `Confirm`, the terminal shows clear progress for `git add`, `git commit`, and `git push`.
 - After `Confirm` succeeds, the CLI exits directly.
+
+## Engineering Notes
+
+- The analysis pipeline now follows `workspace snapshot -> change analysis -> IR -> prompt / fallback`.
+- Brief generation is type-specific:
+  - `commit`
+  - `commit-title`
+  - `commit-summary`
+  - `cr-description`
+- The project currently keeps global TypeScript `strict` disabled to avoid turning the refactor close-out into a broad compile-fix pass.
+- Regression coverage currently focuses on:
+  - command parsing
+  - patch utilities
+  - IR generation
+  - brief parsing and fallback generation
 
 ## Notes
 

@@ -1,6 +1,9 @@
 import OpenAI from 'openai';
-import {buildFallbackSuggestion, parseSuggestion} from '../fallback-suggestion.js';
-import {serializeModelResponse, writeModelLog} from '../model-log.js';
+import type {BriefType} from '../commands.js';
+import type {GeneratedBrief} from '../briefs.js';
+import {buildBriefFromReasoning, buildFallbackBrief, parseGeneratedBrief} from '../fallback-suggestion.js';
+import {hashParts, readJsonCache, serializeModelResponse, writeJsonCache, writeModelLog, writePipelineLog} from '../model-log.js';
+import {BASE_SYSTEM_PROMPT} from '../prompt.js';
 
 /**
  * @typedef {Object} ProviderConfig
@@ -19,15 +22,22 @@ import {serializeModelResponse, writeModelLog} from '../model-log.js';
  * @property {unknown} [reasoning_content] 推理内容。
  */
 
-/**
- * @typedef {'model'|'zhipu-reasoning'|'fallback-empty-response'|'fallback-parse-failed'} GenerationMode
- */
+/** 生成模式 */
+export type GenerationMode = 'model' | 'zhipu-reasoning' | 'fallback-empty-response' | 'fallback-parse-failed';
 
-/**
- * @typedef {Object} GenerationResult
- * @property {import('../fallback-suggestion.js').CommitSuggestion} suggestion 提交建议。
- * @property {GenerationMode} mode 生成模式。
- */
+/** Provider 生成结果 */
+export interface GenerationResult {
+  /** brief 输出 */
+  brief: GeneratedBrief;
+  /** 生成模式 */
+  mode: GenerationMode;
+}
+
+/** 生成选项 */
+export interface GenerationOptions {
+  /** 是否跳过 brief 结果缓存 */
+  bypassCache?: boolean;
+}
 
 /**
  * @description 构建 OpenAI 兼容 Provider 配置。
@@ -83,14 +93,11 @@ async function requestMessage(client, config, model, prompt, maxTokens) {
       {
         role: 'system',
         content: [
-          'You are generating a git commit summary.',
-          'Return exactly one valid JSON object.',
-          'The JSON object must contain keys: type, subject, bullets.',
-          'type must be one of feat, fix, chore.',
-          'subject must be concise Chinese.',
-          'bullets must be an array of 2-4 short Chinese strings.',
-          'Do not wrap JSON in markdown fences.',
-          'Do not output any extra explanation.'
+          BASE_SYSTEM_PROMPT,
+          '请严格按照用户提示中声明的 brief 类型和 JSON 结构输出。',
+          '只返回一个合法的 JSON 对象。',
+          '不要输出 Markdown 代码块。',
+          '不要输出任何额外解释。'
         ].join('\n')
       },
       {
@@ -170,19 +177,13 @@ function extractMessageText(message) {
  * @param {string} reasoning 模型 reasoning 文本。
  * @return {Promise<string>} 二次格式化后的 JSON 文本。
  */
-async function formatFromReasoning(client, config, reasoning) {
+async function formatFromReasoning(client, config, reasoning, briefType) {
   const prompt = [
-    'Convert the analysis below into strict JSON only.',
-    'Return exactly one JSON object with keys: type, subject, bullets.',
-    'type must be one of feat, fix, chore.',
-    'subject must be concise Chinese, max 30 Chinese characters.',
-    'subject must summarize the main intent or outcome, not low-level edits.',
-    'bullets must be 2-4 short Chinese items with semantic value.',
-    'Prefer module-level or behavior-level language such as capability, stability, performance, maintainability, diagnosis, or flow changes.',
-    'Avoid changelog-style trivial actions like adding variables, moving lines, or updating imports.',
-    'Do not include markdown fences or any extra text.',
+    '请将下面的分析结果整理为严格 JSON。',
+    ...buildFormatRules(briefType),
+    '不要输出 Markdown 代码块，也不要输出任何额外文本。',
     '',
-    '[ANALYSIS]',
+    '[分析内容]',
     reasoning.slice(-6000)
   ].join('\n');
 
@@ -194,9 +195,56 @@ async function formatFromReasoning(client, config, reasoning) {
  * @description 使用 OpenAI 兼容协议生成提交建议。
  * @param {ProviderConfig} config Provider 配置。
  * @param {string} prompt 输入提示词。
+ * @param {BriefType} briefType brief 类型。
  * @return {Promise<GenerationResult>} 提交建议与生成模式。
  */
-export async function generateWithOpenAICompatible(config, prompt) {
+export async function generateWithOpenAICompatible(config, prompt, briefType, options: GenerationOptions = {}) {
+  const cacheKey = hashParts(
+    'brief-v1',
+    config.provider,
+    config.baseURL,
+    config.model,
+    config.formatModel,
+    String(config.enableThinking),
+    String(config.enableFormatFallback),
+    briefType,
+    prompt
+  );
+  const cached = options.bypassCache ? null : await readJsonCache<GenerationResult>('brief', cacheKey);
+  const shouldIgnoreCachedParseFailure = briefType === 'commit' && cached?.mode === 'fallback-parse-failed';
+
+  if (cached && !shouldIgnoreCachedParseFailure) {
+    await writePipelineLog('brief.cache', {
+      provider: config.provider,
+      model: config.model,
+      briefType,
+      hit: true,
+      mode: cached.mode,
+      bypassCache: false
+    });
+    return cached;
+  }
+
+  if (shouldIgnoreCachedParseFailure) {
+    await writePipelineLog('brief.cache', {
+      provider: config.provider,
+      model: config.model,
+      briefType,
+      hit: false,
+      mode: 'stale-parse-failed',
+      bypassCache: false
+    });
+  } else if (options.bypassCache) {
+    await writePipelineLog('brief.cache', {
+      provider: config.provider,
+      model: config.model,
+      briefType,
+      hit: false,
+      mode: 'bypass',
+      bypassCache: true
+    });
+  }
+
   const client = new OpenAI({
     apiKey: config.apiKey,
     baseURL: config.baseURL
@@ -207,29 +255,95 @@ export async function generateWithOpenAICompatible(config, prompt) {
     let text = extractMessageText(message);
 
     if (config.enableFormatFallback && !text && typeof message.reasoning_content === 'string' && message.reasoning_content.trim()) {
-      text = await formatFromReasoning(client, config, message.reasoning_content.trim());
+      text = await formatFromReasoning(client, config, message.reasoning_content.trim(), briefType);
     }
 
     if (text) {
       try {
-        return {
-          suggestion: parseSuggestion(text),
+        const result = {
+          brief: parseGeneratedBrief(text, briefType),
           mode: 'model'
         };
+        await writeJsonCache('brief', cacheKey, result);
+        await writePipelineLog('brief.cache', {
+          provider: config.provider,
+          model: config.model,
+          briefType,
+          hit: false,
+          mode: result.mode,
+          bypassCache: Boolean(options.bypassCache)
+        });
+        return result;
       } catch {
-        return {
-          suggestion: buildFallbackSuggestion(prompt, typeof message.reasoning_content === 'string' ? message.reasoning_content : ''),
+        const result = {
+          brief: buildFallbackBrief(prompt, typeof message.reasoning_content === 'string' ? message.reasoning_content : '', briefType),
           mode: 'fallback-parse-failed'
         };
+        await writeJsonCache('brief', cacheKey, result);
+        await writePipelineLog('brief.cache', {
+          provider: config.provider,
+          model: config.model,
+          briefType,
+          hit: false,
+          mode: result.mode,
+          bypassCache: Boolean(options.bypassCache)
+        });
+        return result;
       }
     }
 
-    return {
-      suggestion: buildFallbackSuggestion(prompt, typeof message.reasoning_content === 'string' ? message.reasoning_content : ''),
+    const result = {
+      brief: buildFallbackBrief(prompt, typeof message.reasoning_content === 'string' ? message.reasoning_content : '', briefType),
       mode: 'fallback-empty-response'
     };
+    await writeJsonCache('brief', cacheKey, result);
+    await writePipelineLog('brief.cache', {
+      provider: config.provider,
+      model: config.model,
+      briefType,
+      hit: false,
+      mode: result.mode,
+      bypassCache: Boolean(options.bypassCache)
+    });
+    return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Model request failed: ${message}`);
   }
+}
+
+/**
+ * @description 构建格式化阶段规则。
+ * @param {BriefType} briefType brief 类型。
+ * @return {string[]} 规则列表。
+ */
+function buildFormatRules(briefType) {
+  if (briefType === 'commit') {
+    return [
+      '请返回一个 JSON 对象，字段为：title、bullets。',
+      'title 必须是一行简洁的 conventional commit 标题，内容使用中文。',
+      'bullets 必须是 2 到 6 条有语义价值的中文短句。'
+    ];
+  }
+
+  if (briefType === 'commit-title') {
+    return [
+      '请返回一个 JSON 对象，字段只有：title。',
+      'title 必须是一行简洁的 conventional commit 标题，内容使用中文。'
+    ];
+  }
+
+  if (briefType === 'commit-summary') {
+    return [
+      '请返回一个 JSON 对象，字段只有：bullets。',
+      'bullets 必须是 2 到 6 条有语义价值的中文短句。'
+    ];
+  }
+
+  return [
+    '请返回一个 JSON 对象，字段为：changePurpose、keyChanges、impactScope、reviewerFocus、testingValidation。',
+    '字段名保持英文，但字段内容使用简体中文。',
+    'changePurpose 必须是一句到两句简洁中文。',
+    'keyChanges 和 impactScope 必须是 2 到 6 条中文短句数组。'
+  ];
 }

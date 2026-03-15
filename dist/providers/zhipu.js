@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
-import { buildFallbackSuggestion, buildSuggestionFromReasoning, parseSuggestion } from '../fallback-suggestion.js';
-import { serializeModelResponse, writeModelLog } from '../model-log.js';
+import { buildBriefFromReasoning, buildFallbackBrief, parseGeneratedBrief } from '../fallback-suggestion.js';
+import { hashParts, readJsonCache, serializeModelResponse, writeJsonCache, writeModelLog, writePipelineLog } from '../model-log.js';
+import { BASE_SYSTEM_PROMPT } from '../prompt.js';
 import { createOpenAICompatibleConfig } from './openai-compatible.js';
 /**
  * @description 构建智谱 Provider 配置。
@@ -20,10 +21,46 @@ export function getZhipuConfig() {
 /**
  * @description 使用智谱模型生成提交建议。
  * @param {string} prompt 输入提示词。
+ * @param {BriefType} briefType brief 类型。
+ * @param {import('./openai-compatible.js').GenerationOptions} [options] 生成选项。
  * @return {Promise<import('./openai-compatible.js').GenerationResult>} 提交建议与生成模式。
  */
-export async function generateSuggestion(prompt) {
+export async function generateSuggestion(prompt, briefType, options = {}) {
     const config = getZhipuConfig();
+    const cacheKey = hashParts('brief-v1', config.provider, config.baseURL, config.model, config.formatModel, String(config.enableThinking), String(config.enableFormatFallback), briefType, prompt);
+    const cached = options.bypassCache ? null : await readJsonCache('brief', cacheKey);
+    const shouldIgnoreCachedParseFailure = briefType === 'commit' && cached?.mode === 'fallback-parse-failed';
+    if (cached && !shouldIgnoreCachedParseFailure) {
+        await writePipelineLog('brief.cache', {
+            provider: config.provider,
+            model: config.model,
+            briefType,
+            hit: true,
+            mode: cached.mode,
+            bypassCache: false
+        });
+        return cached;
+    }
+    if (shouldIgnoreCachedParseFailure) {
+        await writePipelineLog('brief.cache', {
+            provider: config.provider,
+            model: config.model,
+            briefType,
+            hit: false,
+            mode: 'stale-parse-failed',
+            bypassCache: false
+        });
+    }
+    else if (options.bypassCache) {
+        await writePipelineLog('brief.cache', {
+            provider: config.provider,
+            model: config.model,
+            briefType,
+            hit: false,
+            mode: 'bypass',
+            bypassCache: true
+        });
+    }
     const client = new OpenAI({
         apiKey: config.apiKey,
         baseURL: config.baseURL
@@ -48,14 +85,11 @@ export async function generateSuggestion(prompt) {
             {
                 role: 'system',
                 content: [
-                    'You are generating a git commit summary.',
-                    'Return exactly one valid JSON object.',
-                    'The JSON object must contain keys: type, subject, bullets.',
-                    'type must be one of feat, fix, chore.',
-                    'subject must be concise Chinese.',
-                    'bullets must be an array of 2-4 short Chinese strings.',
-                    'Do not wrap JSON in markdown fences.',
-                    'Do not output any extra explanation.'
+                    BASE_SYSTEM_PROMPT,
+                    '请严格按照用户提示中声明的 brief 类型和 JSON 结构输出。',
+                    '只返回一个合法的 JSON 对象。',
+                    '不要输出 Markdown 代码块。',
+                    '不要输出任何额外解释。'
                 ].join('\n')
             },
             {
@@ -77,34 +111,84 @@ export async function generateSuggestion(prompt) {
         const reasoning = typeof message.reasoning_content === 'string' ? message.reasoning_content.trim() : '';
         if (content) {
             try {
-                return {
-                    suggestion: parseSuggestion(content),
+                const result = {
+                    brief: parseGeneratedBrief(content, briefType),
                     mode: 'model'
                 };
+                await writeJsonCache('brief', cacheKey, result);
+                await writePipelineLog('brief.cache', {
+                    provider: config.provider,
+                    model: config.model,
+                    briefType,
+                    hit: false,
+                    mode: result.mode,
+                    bypassCache: Boolean(options.bypassCache)
+                });
+                return result;
             }
             catch {
                 if (reasoning) {
-                    return {
-                        suggestion: buildSuggestionFromReasoning(prompt, reasoning),
+                    const result = {
+                        brief: buildBriefFromReasoning(prompt, reasoning, briefType),
                         mode: 'zhipu-reasoning'
                     };
+                    await writeJsonCache('brief', cacheKey, result);
+                    await writePipelineLog('brief.cache', {
+                        provider: config.provider,
+                        model: config.model,
+                        briefType,
+                        hit: false,
+                        mode: result.mode,
+                        bypassCache: Boolean(options.bypassCache)
+                    });
+                    return result;
                 }
-                return {
-                    suggestion: buildFallbackSuggestion(prompt, content),
+                const result = {
+                    brief: buildFallbackBrief(prompt, content, briefType),
                     mode: 'fallback-parse-failed'
                 };
+                await writeJsonCache('brief', cacheKey, result);
+                await writePipelineLog('brief.cache', {
+                    provider: config.provider,
+                    model: config.model,
+                    briefType,
+                    hit: false,
+                    mode: result.mode,
+                    bypassCache: Boolean(options.bypassCache)
+                });
+                return result;
             }
         }
         if (reasoning) {
-            return {
-                suggestion: buildSuggestionFromReasoning(prompt, reasoning),
+            const result = {
+                brief: buildBriefFromReasoning(prompt, reasoning, briefType),
                 mode: 'zhipu-reasoning'
             };
+            await writeJsonCache('brief', cacheKey, result);
+            await writePipelineLog('brief.cache', {
+                provider: config.provider,
+                model: config.model,
+                briefType,
+                hit: false,
+                mode: result.mode,
+                bypassCache: Boolean(options.bypassCache)
+            });
+            return result;
         }
-        return {
-            suggestion: buildFallbackSuggestion(prompt, ''),
+        const result = {
+            brief: buildFallbackBrief(prompt, '', briefType),
             mode: 'fallback-empty-response'
         };
+        await writeJsonCache('brief', cacheKey, result);
+        await writePipelineLog('brief.cache', {
+            provider: config.provider,
+            model: config.model,
+            briefType,
+            hit: false,
+            mode: result.mode,
+            bypassCache: Boolean(options.bypassCache)
+        });
+        return result;
     }
     catch (error) {
         await writeModelLog({

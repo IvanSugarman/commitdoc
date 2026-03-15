@@ -1,3 +1,4 @@
+import type {BriefType} from '../commands.js';
 import {createOpenAICompatibleConfig, generateWithOpenAICompatible} from './openai-compatible.js';
 
 /**
@@ -19,8 +20,10 @@ export function getArkConfig() {
 /**
  * @description 使用火山方舟模型生成提交建议。
  * @param {string} prompt 输入提示词。
+ * @param {BriefType} briefType brief 类型。
+ * @param {import('./openai-compatible.js').GenerationOptions} [options] 生成选项。
  * @return {Promise<import('./openai-compatible.js').GenerationResult>} 提交建议与生成模式。
  */
-export async function generateSuggestion(prompt) {
-  return generateWithOpenAICompatible(getArkConfig(), prompt);
+export async function generateSuggestion(prompt, briefType: BriefType, options: import('./openai-compatible.js').GenerationOptions = {}) {
+  return generateWithOpenAICompatible(getArkConfig(), prompt, briefType, options);
 }
